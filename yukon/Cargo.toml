@@ -1,0 +1,8 @@
+[package]
+name = "yukon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+yukon-macros = { path = "../macros" }
+yukon-common = { path = "../common"}

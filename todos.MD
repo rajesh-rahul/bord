@@ -1,0 +1,1 @@
+add bench comparing enumset and without it

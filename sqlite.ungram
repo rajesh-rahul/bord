@@ -1,0 +1,21 @@
+SelectStmt = 
+    'SELECT' is_distinct: ('DISTINCT' | 'ALL')? ResultColumnList FromClause? ';'
+
+
+ResultColumnList = ResultColumn (',' ResultColumn)*
+
+ResultColumn = '*' | 'ident' '.' '*' |  Expr alias: ColumnAlias?
+
+ColumnAlias = 'AS'? 'iden'
+
+FromClause = 'FROM' 'table'
+
+Expr = ExprLit | ExprParen | ExprColumnName
+
+ExprColumnName = 'iden' | 'iden' '.' 'iden' | 'iden' '.' 'iden' '.' 'iden'
+
+ExprParen = '(' Expr ')'
+
+// ExprPrefix = (OpBinComplement | OpUnaryPlus | OpUnaryMinus | OpNot) Expr
+
+ExprLit = 'int_lit' | 'hex_lit' | 'str_lit' | 'real_lit'

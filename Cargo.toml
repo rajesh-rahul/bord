@@ -1,0 +1,21 @@
+[workspace]
+
+members = [
+    "yukon",
+    "common",
+    "macros",
+    "server",
+    "schema-engine",
+    "sqlite3-analyzer",
+    "sqlite3-parser",
+]
+
+resolver = "2"
+
+[workspace.dependencies]
+serde_json = "1.0.117"
+# tokio = { version = "1.38.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+smol_str = "0.2.2"
+ahash = "0.8.11"

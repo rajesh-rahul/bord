@@ -1,0 +1,16 @@
+[package]
+name = "yukon-macros"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "yukon_macros"
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+# https://github.com/dtolnay/proc-macro-workshop#debugging-tips
+syn = { version = "*", features = ["extra-traits"] }
+quote = "*"
+proc-macro2 = "*"
+yukon-common = { path = "../common" }
