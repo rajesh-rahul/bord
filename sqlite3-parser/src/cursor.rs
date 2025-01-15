@@ -35,7 +35,6 @@ impl<'a> TokenBuilder<'a> {
         self.curr_byte_len = 0;
         self.curr_char_len = 0;
     }
-
 }
 
 impl<'a> LexCursor<'a> {
@@ -56,7 +55,6 @@ impl<'a> LexCursor<'a> {
             self.next();
         }
     }
-
 
     pub fn first(&self) -> Option<char> {
         self.token_builder.chars.clone().next()
@@ -100,10 +98,14 @@ impl<'a> LexCursor<'a> {
         (token, abs_pos)
     }
 
-
-    pub fn build_error_token_info(&mut self, is_err_predicate: fn(char) -> bool) -> (&'a str, u32) {
+    pub fn build_error_token_info(
+        &mut self,
+        is_err_predicate: impl Fn(char) -> bool,
+    ) -> (&'a str, u32) {
         // Atleast one character must be consumed or else we will be stuck in an infinite loop
-        self.next();
+        if self.token_builder.curr_char_len == 0 {
+            self.next();
+        }
 
         while let Some(ch) = self.first() {
             if is_err_predicate(ch) {
