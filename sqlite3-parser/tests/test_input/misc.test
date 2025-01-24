@@ -1,0 +1,45 @@
+EXPLAIN ATTACH DATABASE f AS f KEY f;
+
+File {
+    Statement {
+        ExplainClause {
+            "EXPLAIN"
+        }
+        StatementNoCte {
+            AttachDbStmt {
+                "ATTACH"
+                "DATABASE"
+                FileNameExpr {
+                    Expr {
+                        ExprColumnName {
+                            ColumnName {
+                                "f - IDEN"
+                            }
+                        }
+                    }
+                }
+                "AS"
+                SchemaNameExpr {
+                    Expr {
+                        ExprColumnName {
+                            ColumnName {
+                                "f - IDEN"
+                            }
+                        }
+                    }
+                }
+                "KEY"
+                PasswordExpr {
+                    Expr {
+                        ExprColumnName {
+                            ColumnName {
+                                "f - IDEN"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ";"
+}

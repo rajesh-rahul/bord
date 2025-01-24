@@ -1,0 +1,27 @@
+EXPLAIN INSERT OR 
+
+File {
+    Statement {
+        ExplainClause {
+            "EXPLAIN"
+        }
+        StatementWithCte {
+            InsertStmt {
+                InsertStmtKind {
+                    "INSERT"
+                    "OR"
+                    Error {
+                    }
+                }
+                Error {
+                }
+                Error {
+                }
+                Error {
+                }
+            }
+        }
+    }
+    Error {
+    }
+}

@@ -1,0 +1,113 @@
+CREATE TABLE f
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "f - IDEN"
+                    }
+                }
+                Error {
+                }
+            }
+        }
+    }
+    Error {
+    }
+}
+%%
+CREATE TABLE f AS
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "f - IDEN"
+                    }
+                }
+                CreateTableSelect {
+                    "AS"
+                    Error {
+                    }
+                }
+            }
+        }
+    }
+    Error {
+    }
+}
+%%
+CREATE TABLE users(name TEXT);
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "users - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TEXT - IDEN"
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    ";"
+}
+%%
+CREATE TABLE users(name TEXT)
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "users - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TEXT - IDEN"
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    Error {
+    }
+}

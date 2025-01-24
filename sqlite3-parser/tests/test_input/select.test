@@ -1,242 +1,182 @@
-SELECT 1;
+SELECT 1
 
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprLit { "1" }
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
+                                    Expr {
+                                        ExprLit {
+                                            "1 - INT_LIT"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    ";"
-}
-%%
-SELECT 1;
-
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprLit { "1" }
-            }
-        }
+    Error {
     }
-    ";"
 }
 %%
+SELECT (1 + 1) + 2 / 4 + 3
 
-SELECT (1 + 1) + 2 / 4 + 3;
-
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprInfix {
-                    Expr {
-                        ExprInfix {
-                            Expr {
-                                ExprParen {
-                                    "("
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
                                     Expr {
                                         ExprInfix {
-                                            Expr {
-                                                ExprLit {
-                                                    "1"
-                                                }
-                                            }
                                             OpAdd {
-                                                "+"
-                                            }
-                                            Expr {
-                                                ExprLit {
-                                                    "1"
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ")"
-                                }
-                            }
-                            OpAdd {
-                                "+"
-                            }
-                            Expr {
-                                ExprInfix {
-                                    Expr {
-                                        ExprLit {
-                                            "2"
-                                        }
-                                    }
-                                    OpDivide {
-                                        "/"
-                                    }
-                                    Expr {
-                                        ExprLit {
-                                            "4"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    OpAdd {
-                        "+"
-                    }
-                    Expr {
-                        ExprLit {
-                            "3"
-                        }
-                    }
-                }
-            }
-        }
-    }
-    ";"
-}
-%%
-
-SELECT 1 + 
-
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprInfix {
-                    Expr {
-                        ExprLit {
-                            "1"
-                        }
-                    }
-                    OpAdd {
-                        "+"
-                    }
-                    ErrorTree {
-                    }
-                }
-            }
-        }
-    }
-    ErrorTree {
-    }
-}
-%%
-
-SELECT 1 + ;
-
-
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprInfix {
-                    Expr {
-                        ExprLit {
-                            "1"
-                        }
-                    }
-                    OpAdd {
-                        "+"
-                    }
-                    ErrorTree {
-                    }
-                }
-            }
-        }
-    }
-    ";"
-}
-%%
-
-SELECT 1 BETWEEN 1 BETWEEN (6 + 9) + 3 AND 0 + 3 AND 0;
-
-SelectStmt {
-    "SELECT"
-    ResultColumnList {
-        ResultColumn {
-            Expr {
-                ExprInfix {
-                    Expr {
-                        ExprLit {
-                            "1"
-                        }
-                    }
-                    OpBetweenAnd {
-                        "BETWEEN"
-                        Expr {
-                            ExprInfix {
-                                Expr {
-                                    ExprLit {
-                                        "1"
-                                    }
-                                }
-                                OpBetweenAnd {
-                                    "BETWEEN"
-                                    Expr {
-                                        ExprInfix {
-                                            Expr {
-                                                ExprParen {
-                                                    "("
-                                                    Expr {
-                                                        ExprInfix {
+                                                Expr {
+                                                    ExprInfix {
+                                                        OpAdd {
                                                             Expr {
-                                                                ExprLit {
-                                                                    "6"
+                                                                ExprList {
+                                                                    "("
+                                                                    Expr {
+                                                                        ExprInfix {
+                                                                            OpAdd {
+                                                                                Expr {
+                                                                                    ExprLit {
+                                                                                        "1 - INT_LIT"
+                                                                                    }
+                                                                                }
+                                                                                "+"
+                                                                                Expr {
+                                                                                    ExprLit {
+                                                                                        "1 - INT_LIT"
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    ")"
                                                                 }
                                                             }
-                                                            OpAdd {
-                                                                "+"
-                                                            }
+                                                            "+"
                                                             Expr {
-                                                                ExprLit {
-                                                                    "9"
+                                                                ExprInfix {
+                                                                    OpDivide {
+                                                                        Expr {
+                                                                            ExprLit {
+                                                                                "2 - INT_LIT"
+                                                                            }
+                                                                        }
+                                                                        "/"
+                                                                        Expr {
+                                                                            ExprLit {
+                                                                                "4 - INT_LIT"
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                         }
                                                     }
-                                                    ")"
                                                 }
-                                            }
-                                            OpAdd {
                                                 "+"
-                                            }
-                                            Expr {
-                                                ExprLit {
-                                                    "3"
+                                                Expr {
+                                                    ExprLit {
+                                                        "3 - INT_LIT"
+                                                    }
                                                 }
-                                            }
-                                        }
-                                    }
-                                    "AND"
-                                }
-                                Expr {
-                                    ExprInfix {
-                                        Expr {
-                                            ExprLit {
-                                                "0"
-                                            }
-                                        }
-                                        OpAdd {
-                                            "+"
-                                        }
-                                        Expr {
-                                            ExprLit {
-                                                "3"
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        "AND"
                     }
-                    Expr {
-                        ExprLit {
-                            "0"
+                }
+            }
+        }
+    }
+    Error {
+    }
+}
+%%
+SELECT 1 + 
+
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
+                                    Expr {
+                                        ExprInfix {
+                                            OpAdd {
+                                                Expr {
+                                                    ExprLit {
+                                                        "1 - INT_LIT"
+                                                    }
+                                                }
+                                                "+"
+                                                Error {
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Error {
+    }
+}
+%%
+SELECT 1 + ;
+
+
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
+                                    Expr {
+                                        ExprInfix {
+                                            OpAdd {
+                                                Expr {
+                                                    ExprLit {
+                                                        "1 - INT_LIT"
+                                                    }
+                                                }
+                                                "+"
+                                                Error {
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -244,4 +184,111 @@ SelectStmt {
         }
     }
     ";"
+}
+%%
+SELECT 1 BETWEEN 1 BETWEEN (6 + 9) + 3 AND 0 + 3 AND 0
+
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
+                                    Expr {
+                                        ExprInfix {
+                                            OpBetweenAnd {
+                                                Expr {
+                                                    ExprLit {
+                                                        "1 - INT_LIT"
+                                                    }
+                                                }
+                                                "BETWEEN"
+                                                Expr {
+                                                    ExprInfix {
+                                                        OpBetweenAnd {
+                                                            Expr {
+                                                                ExprLit {
+                                                                    "1 - INT_LIT"
+                                                                }
+                                                            }
+                                                            "BETWEEN"
+                                                            Expr {
+                                                                ExprInfix {
+                                                                    OpAdd {
+                                                                        Expr {
+                                                                            ExprList {
+                                                                                "("
+                                                                                Expr {
+                                                                                    ExprInfix {
+                                                                                        OpAdd {
+                                                                                            Expr {
+                                                                                                ExprLit {
+                                                                                                    "6 - INT_LIT"
+                                                                                                }
+                                                                                            }
+                                                                                            "+"
+                                                                                            Expr {
+                                                                                                ExprLit {
+                                                                                                    "9 - INT_LIT"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                                ")"
+                                                                            }
+                                                                        }
+                                                                        "+"
+                                                                        Expr {
+                                                                            ExprLit {
+                                                                                "3 - INT_LIT"
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            "AND"
+                                                            Expr {
+                                                                ExprInfix {
+                                                                    OpAdd {
+                                                                        Expr {
+                                                                            ExprLit {
+                                                                                "0 - INT_LIT"
+                                                                            }
+                                                                        }
+                                                                        "+"
+                                                                        Expr {
+                                                                            ExprLit {
+                                                                                "3 - INT_LIT"
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                "AND"
+                                                Expr {
+                                                    ExprLit {
+                                                        "0 - INT_LIT"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Error {
+    }
 }

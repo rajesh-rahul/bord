@@ -1,8 +1,4 @@
-#[cfg(test)]
-mod common;
-
-#[cfg(test)]
-use pretty_assertions::assert_eq;
+use bord_sqlite3_parser::*;
 
 #[test]
 // Read each file in the corpus directory parse it and compare the result to the expected output
@@ -19,35 +15,14 @@ fn test_from_corpus() {
 
     for entry in file_paths {
         let input_string = fs::read_to_string(entry.path()).unwrap();
-        let mut input = input_string.as_str();
 
-        while !input.is_empty() {
-            let (i, data) = common::test_data(&input).unwrap();
+        input_string.split("%%").for_each(|test_data| {
+            println!("data: {test_data}");
+            let (sql, expected_ast_as_str) = test_data.split_once("\n\n").unwrap();
+            let ast = bord_sqlite3_parser::parse(sql);
 
-            let (actual_tree, _) = yukon_sqlite3_parser::parse(&data.input);
-            let actual = common::convert_tree_to_simple_node(&actual_tree);
-            let expected = data.expected;
-
-            if actual != expected {
-                println!("Failed to parse {:?}:", entry.path());
-                let mut actual_str = String::new();
-                for node in &actual {
-                    common::print_simple_node(&node, 0, &mut actual_str, true);
-                }
-                let mut expected_str = String::new();
-                for node in &expected {
-                    common::print_simple_node(&node, 0, &mut expected_str, true);
-                }
-
-                let mut actual_str_wide = String::new();
-                for node in &actual {
-                    common::print_simple_node(&node, 0, &mut actual_str_wide, false);
-                }
-
-                println!("Actual str:\n{}", actual_str_wide);
-                assert_eq!(expected_str, actual_str);
-            }
-            input = i;
-        }
+            crate::test_utils::check_input(&ast, expected_ast_as_str);
+            crate::test_utils::ensure_ast_conforms_to_ungram(&ast);
+        });
     }
 }
