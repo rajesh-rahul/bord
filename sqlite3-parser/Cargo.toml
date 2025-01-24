@@ -1,5 +1,5 @@
 [package]
-name = "yukon-sqlite3-parser"
+name = "bord-sqlite3-parser"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,14 +7,21 @@ edition = "2021"
 ahash.workspace = true
 enumset = "1.1.3"
 smol_str.workspace = true
+strum = { version = "0.26", features = ["derive"] }
+
+# These dependencies are only used for testing
+nom = { version = "7.1.3", optional = true }
+pretty_assertions =  { version = "1.4.0", optional = true }
+ungrammar = { version = "1.16.1" }
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }
-nom = "7.1.3"
-pretty_assertions = "1.4.0"
 sqlite3-parser = "0.12.0"
-
+fallible-iterator = "0.3.0"
 
 [[bench]]
 name = "lexer_bench"
 harness = false
+
+[features]
+test_utils = ["dep:nom", "dep:pretty_assertions"]
