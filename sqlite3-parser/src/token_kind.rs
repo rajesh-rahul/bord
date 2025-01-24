@@ -1,3 +1,5 @@
+#![allow(non_snake_case, non_camel_case_types)]
+
 use std::sync::OnceLock;
 
 use ahash::AHashMap;
@@ -6,8 +8,6 @@ use enumset::EnumSetType;
 pub const MAX_KEYWORD_LEN: usize = 17;
 
 #[derive(Debug, PartialOrd, Ord, Hash, EnumSetType)]
-#[allow(non_camel_case_types)]
-#[repr(u16)]
 pub enum SqliteTokenKind {
     KW_ABORT,
     KW_ACTION,
@@ -228,7 +228,15 @@ pub enum SqliteTokenKind {
     Q_MARK,
     INT_LIT,
     HEX_LIT,
+    BLOB_LIT,
     ERROR,
+
+    // Not actually keywords but we treat them as such to make things easy in the parser
+    KW_TRUE,
+    KW_FALSE,
+    KW_STORED,
+    KW_ROWID,
+    KW_STRICT,
 }
 
 impl SqliteTokenKind {
@@ -248,6 +256,15 @@ impl SqliteTokenKind {
 
             _ => None,
         }
+    }
+
+    pub const fn is_trivia(&self) -> bool {
+        matches!(
+            self,
+            SqliteTokenKind::WHITESPACE
+                | SqliteTokenKind::S_LINE_COMMENT
+                | SqliteTokenKind::M_LINE_COMMENT
+        )
     }
 }
 
@@ -341,6 +358,207 @@ macro_rules! T {
     (')') => {
         SqliteTokenKind::R_PAREN
     };
+}
+
+impl SqliteTokenKind {
+    pub fn as_str(&self) -> &str {
+        use SqliteTokenKind::*;
+
+        match self {
+            KW_ABORT => "ABORT",
+            KW_ACTION => "ACTION",
+            KW_ADD => "ADD",
+            KW_AFTER => "AFTER",
+            KW_ALL => "ALL",
+            KW_ALTER => "ALTER",
+            KW_ALWAYS => "ALWAYS",
+            KW_ANALYZE => "ANALYZE",
+            KW_AND => "AND",
+            KW_AS => "AS",
+            KW_ASC => "ASC",
+            KW_ATTACH => "ATTACH",
+            KW_AUTOINCREMENT => "AUTOINCREMENT",
+            KW_BEFORE => "BEFORE",
+            KW_BEGIN => "BEGIN",
+            KW_BETWEEN => "BETWEEN",
+            KW_BY => "BY",
+            KW_CASCADE => "CASCADE",
+            KW_CASE => "CASE",
+            KW_CAST => "CAST",
+            KW_CHECK => "CHECK",
+            KW_COLLATE => "COLLATE",
+            KW_COLUMN => "COLUMN",
+            KW_COMMIT => "COMMIT",
+            KW_CONFLICT => "CONFLICT",
+            KW_CONSTRAINT => "CONSTRAINT",
+            KW_CREATE => "CREATE",
+            KW_CROSS => "CROSS",
+            KW_CURRENT => "CURRENT",
+            KW_CURRENT_DATE => "CURRENT_DATE",
+            KW_CURRENT_TIME => "CURRENT_TIME",
+            KW_CURRENT_TIMESTAMP => "CURRENT_TIMESTAMP",
+            KW_DATABASE => "DATABASE",
+            KW_DEFAULT => "DEFAULT",
+            KW_DEFERRABLE => "DEFERRABLE",
+            KW_DEFERRED => "DEFERRED",
+            KW_DELETE => "DELETE",
+            KW_DESC => "DESC",
+            KW_DETACH => "DETACH",
+            KW_DISTINCT => "DISTINCT",
+            KW_DO => "DO",
+            KW_DROP => "DROP",
+            KW_EACH => "EACH",
+            KW_ELSE => "ELSE",
+            KW_END => "END",
+            KW_ESCAPE => "ESCAPE",
+            KW_EXCEPT => "EXCEPT",
+            KW_EXCLUDE => "EXCLUDE",
+            KW_EXCLUSIVE => "EXCLUSIVE",
+            KW_EXISTS => "EXISTS",
+            KW_EXPLAIN => "EXPLAIN",
+            KW_FAIL => "FAIL",
+            KW_FILTER => "FILTER",
+            KW_FIRST => "FIRST",
+            KW_FOLLOWING => "FOLLOWING",
+            KW_FOR => "FOR",
+            KW_FOREIGN => "FOREIGN",
+            KW_FROM => "FROM",
+            KW_FULL => "FULL",
+            KW_GENERATED => "GENERATED",
+            KW_GLOB => "GLOB",
+            KW_GROUP => "GROUP",
+            KW_GROUPS => "GROUPS",
+            KW_HAVING => "HAVING",
+            KW_IF => "IF",
+            KW_IGNORE => "IGNORE",
+            KW_IMMEDIATE => "IMMEDIATE",
+            KW_IN => "IN",
+            KW_INDEX => "INDEX",
+            KW_INDEXED => "INDEXED",
+            KW_INITIALLY => "INITIALLY",
+            KW_INNER => "INNER",
+            KW_INSERT => "INSERT",
+            KW_INSTEAD => "INSTEAD",
+            KW_INTERSECT => "INTERSECT",
+            KW_INTO => "INTO",
+            KW_IS => "IS",
+            KW_ISNULL => "ISNULL",
+            KW_JOIN => "JOIN",
+            KW_KEY => "KEY",
+            KW_LAST => "LAST",
+            KW_LEFT => "LEFT",
+            KW_LIKE => "LIKE",
+            KW_LIMIT => "LIMIT",
+            KW_MATCH => "MATCH",
+            KW_MATERIALIZED => "MATERIALIZED",
+            KW_NATURAL => "NATURAL",
+            KW_NO => "NO",
+            KW_NOT => "NOT",
+            KW_NOTHING => "NOTHING",
+            KW_NOTNULL => "NOTNULL",
+            KW_NULL => "NULL",
+            KW_NULLS => "NULLS",
+            KW_OF => "OF",
+            KW_OFFSET => "OFFSET",
+            KW_ON => "ON",
+            KW_OR => "OR",
+            KW_ORDER => "ORDER",
+            KW_OTHERS => "OTHERS",
+            KW_OUTER => "OUTER",
+            KW_OVER => "OVER",
+            KW_PARTITION => "PARTITION",
+            KW_PLAN => "PLAN",
+            KW_PRAGMA => "PRAGMA",
+            KW_PRECEDING => "PRECEDING",
+            KW_PRIMARY => "PRIMARY",
+            KW_QUERY => "QUERY",
+            KW_RAISE => "RAISE",
+            KW_RANGE => "RANGE",
+            KW_RECURSIVE => "RECURSIVE",
+            KW_REFERENCES => "REFERENCES",
+            KW_REGEXP => "REGEXP",
+            KW_REINDEX => "REINDEX",
+            KW_RELEASE => "RELEASE",
+            KW_RENAME => "RENAME",
+            KW_REPLACE => "REPLACE",
+            KW_RESTRICT => "RESTRICT",
+            KW_RETURNING => "RETURNING",
+            KW_RIGHT => "RIGHT",
+            KW_ROLLBACK => "ROLLBACK",
+            KW_ROW => "ROW",
+            KW_ROWS => "ROWS",
+            KW_SAVEPOINT => "SAVEPOINT",
+            KW_SELECT => "SELECT",
+            KW_SET => "SET",
+            KW_TABLE => "TABLE",
+            KW_TEMP => "TEMP",
+            KW_TEMPORARY => "TEMPORARY",
+            KW_THEN => "THEN",
+            KW_TIES => "TIES",
+            KW_TO => "TO",
+            KW_TRANSACTION => "TRANSACTION",
+            KW_TRIGGER => "TRIGGER",
+            KW_UNBOUNDED => "UNBOUNDED",
+            KW_UNION => "UNION",
+            KW_UNIQUE => "UNIQUE",
+            KW_UPDATE => "UPDATE",
+            KW_USING => "USING",
+            KW_VACUUM => "VACUUM",
+            KW_VALUES => "VALUES",
+            KW_VIEW => "VIEW",
+            KW_VIRTUAL => "VIRTUAL",
+            KW_WHEN => "WHEN",
+            KW_WHERE => "WHERE",
+            KW_WINDOW => "WINDOW",
+            KW_WITH => "WITH",
+            KW_WITHOUT => "WITHOUT",
+            KW_TRUE => "TRUE",
+            KW_FALSE => "FALSE",
+            WHITESPACE => "WHITESPACE",
+            S_LINE_COMMENT => "S_LINE_COMMENT",
+            M_LINE_COMMENT => "M_LINE_COMMENT",
+            STR_LIT => "STR_LIT",
+            REAL_LIT => "REAL_LIT",
+            IDEN => "IDEN",
+            BLOB_LIT => "BLOB_LIT",
+            DOT => ".",
+            STAR => "*",
+            L_PAREN => "(",
+            R_PAREN => ")",
+            COMMA => ",",
+            SEMICOLON => ";",
+            COLON => ":",
+            EQ_SQL => "=",
+            EQ => "==",
+            NOT_EQ_SQL => "<>",
+            NOT_EQ => "!=",
+            PLUS => "+",
+            MINUS => "-",
+            F_SLASH => "/",
+            PERCENT => "%",
+            EOF => "",
+            EXTRACT_TWO => "->>",
+            EXTRACT_ONE => "->",
+            L_CHEV => "<",
+            R_CHEV => ">",
+            L_CHEV_EQ => "<=",
+            R_CHEV_EQ => ">=",
+            DOUBLE_PIPE => "||",
+            TILDA => "~",
+            L_CHEV_TWO => "<<",
+            R_CHEV_TWO => ">>",
+            PIPE => "|",
+            AMPERSAND => "&",
+            Q_MARK => "?",
+            AT_MARK => "@",
+            INT_LIT => "INT_LIT",
+            HEX_LIT => "HEX_LIT",
+            ERROR => "ERROR",
+            KW_STORED => "STORED",
+            KW_ROWID => "ROWID",
+            KW_STRICT => "STRICT",
+        }
+    }
 }
 
 pub fn sqlite_keywords() -> &'static AHashMap<&'static [u8], SqliteTokenKind> {
@@ -501,6 +719,13 @@ pub fn sqlite_keywords() -> &'static AHashMap<&'static [u8], SqliteTokenKind> {
         map.insert("WINDOW".as_bytes(), SqliteTokenKind::KW_WINDOW);
         map.insert("WITH".as_bytes(), SqliteTokenKind::KW_WITH);
         map.insert("WITHOUT".as_bytes(), SqliteTokenKind::KW_WITHOUT);
+
+        // These doesn't seem to be keywords but we will treat them as such
+        map.insert("TRUE".as_bytes(), SqliteTokenKind::KW_TRUE);
+        map.insert("FALSE".as_bytes(), SqliteTokenKind::KW_FALSE);
+        map.insert("STORED".as_bytes(), SqliteTokenKind::KW_STORED);
+        map.insert("STRICT".as_bytes(), SqliteTokenKind::KW_STRICT);
+        map.insert("ROWID".as_bytes(), SqliteTokenKind::KW_ROWID);
 
         map
     })
