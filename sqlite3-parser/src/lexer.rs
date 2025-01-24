@@ -1,7 +1,5 @@
 use crate::cursor::LexCursor;
-use crate::{
-    sqlite_keywords, SqliteToken, SqliteTokenKind, SqliteVersion, MAX_KEYWORD_LEN,
-};
+use crate::{sqlite_keywords, SqliteToken, SqliteTokenKind, SqliteVersion, MAX_KEYWORD_LEN};
 
 use SqliteTokenKind::*;
 
@@ -67,7 +65,7 @@ impl<'input> SqliteLexer<'input> {
             return SqliteToken::new(SqliteTokenKind::EOF, "", self.cursor.abs_position);
         };
 
-        // token is 3-tuple long because that's our longest
+        // token is 3-tuple long because that's our longest 'fixed' token
         let token = (first, self.cursor.second(), self.cursor.third());
 
         let mut build_token = |token: SqliteTokenKind| {
@@ -92,14 +90,12 @@ impl<'input> SqliteLexer<'input> {
             ('=', ..) => build_token(EQ_SQL),
             ('-', Some('-'), ..) => self.process_single_line_comment(),
             ('/', Some('*'), ..) => self.process_multi_line_comment(),
-
-            // In some contexts, SQLite can interpret string literals as identifiers but we do not allow this.
-            // SQLite docs also discourage such usages anyway: https://www.sqlite.org/lang_keywords.html
             ('\'', ..) => self.process_string_literal(),
 
             ('0', Some('x'), Some(d)) | ('0', Some('X'), Some(d)) if d.is_digit(HEXA_RADIX) => {
                 self.process_hex_literal()
             }
+            ('x', Some('\''), ..) | ('X', Some('\''), ..) => self.process_blob_literal(),
             ('.', Some(d), ..) | (d, ..) if d.is_digit(DECI_RADIX) => {
                 self.process_int_or_real_literal()
             }
@@ -124,7 +120,7 @@ impl<'input> SqliteLexer<'input> {
             (c, ..) if is_identifier_start(c) => self.process_keyword_or_identifier(),
 
             // TODO: Special characters should have different error token behaviour?
-            _ => self.build_error_token("Unknown token"),
+            _ => self.build_error_token("Unknown token", true),
         }
     }
 
@@ -164,19 +160,37 @@ impl<'input> SqliteLexer<'input> {
             let mut word: [u8; MAX_KEYWORD_LEN] = [0; MAX_KEYWORD_LEN];
             let input = lexer.cursor.input.clone();
 
-            let iden_iter = input
-                .take(MAX_KEYWORD_LEN)
-                .take_while(|ch| ch.is_ascii_alphabetic())
+            // Note: The set of characters allowed in keywords is a subset of characters
+            // allowed in identifiers. Therefore we can take form a word
+            // with max len being MAX_KEYWORD_LEN) of iden characters and then check if the word
+            // exists in sqlite_keywords()
+            let mut iden_iter = input
+                .take_while(|&ch| is_identifier_continue(ch))
                 .map(|ch| ch.to_ascii_uppercase())
                 .enumerate();
 
             let mut word_len = 0;
-            for (idx, ch) in iden_iter {
+
+            while let Some((idx, ch)) = iden_iter.next() {
                 let Ok(ch_u8) = u8::try_from(ch) else {
                     return None;
                 };
                 word[idx] = ch_u8;
                 word_len += 1;
+
+                if word_len >= MAX_KEYWORD_LEN {
+                    break;
+                }
+            }
+
+            // Account of edge case where we have an IDEN that starts with a keyword that has
+            // size MAX_KEYWORD_LEN
+            if word_len == MAX_KEYWORD_LEN
+                && iden_iter
+                    .next()
+                    .is_some_and(|(_, ch)| is_identifier_continue(ch))
+            {
+                return None;
             }
 
             if let Some(keyword) = sqlite_keywords().get(&word[0..word_len]) {
@@ -234,7 +248,7 @@ impl<'input> SqliteLexer<'input> {
         }
 
         if !is_terminated {
-            return self.build_error_token("String literal not terminated");
+            return self.build_error_token("String literal not terminated", false);
         } else {
             self.build_token(SqliteTokenKind::STR_LIT)
         }
@@ -254,7 +268,7 @@ impl<'input> SqliteLexer<'input> {
         }
 
         if !is_terminated {
-            return self.build_error_token("Quoted identifier not terminated");
+            return self.build_error_token("Quoted identifier not terminated", false);
         } else {
             self.build_token(SqliteTokenKind::IDEN)
         }
@@ -297,7 +311,7 @@ impl<'input> SqliteLexer<'input> {
         match_exponent(&mut self.cursor);
 
         // If the token succeeding the number is not an operator or whitespace, then we must
-        // recognize it has an error token to follow SQLite's lexer behaviour. The actual
+        // recognize it as an error token to follow SQLite's lexer behaviour. The actual
         // rules are bit more tricky but we will live with this approximation for now (TODO: fix)
         // Weirdly, for Hex literals, This is treated as two separate tokens
         if self
@@ -306,7 +320,7 @@ impl<'input> SqliteLexer<'input> {
             .is_some_and(|c| !is_separate_token_start(c) && !c.is_whitespace())
         {
             // We borrow postgres's error message here
-            return self.build_error_token("Trailing junk after numeric literal");
+            return self.build_error_token("Trailing junk after numeric literal", true);
         }
 
         if has_decimal_point {
@@ -325,16 +339,45 @@ impl<'input> SqliteLexer<'input> {
         self.build_token(SqliteTokenKind::HEX_LIT)
     }
 
+    fn process_blob_literal(&mut self) -> SqliteToken {
+        self.cursor.advance_by(2); // Consume the `x'` or `X'`
+
+        let mut blob_lit_len = 0;
+        let mut is_malformed = false;
+        let mut terminated = false;
+
+        while let Some(ch) = self.cursor.next() {
+            if ch == '\'' {
+                terminated = true;
+                break;
+            }
+            if !ch.is_digit(HEXA_RADIX) {
+                is_malformed = true;
+            }
+            blob_lit_len += 1;
+        }
+
+        if !terminated {
+            return self.build_error_token("Unterminated blob literal", false);
+        } else if (blob_lit_len % 2 != 0) || is_malformed {
+            return self.build_error_token("Malformed blob literal", false);
+        } else {
+            return self.build_token(BLOB_LIT);
+        }
+    }
+
     fn build_token(&mut self, token_kind: SqliteTokenKind) -> SqliteToken {
         let (text, abs_pos) = self.cursor.build_token_info();
 
         SqliteToken::new(token_kind, text, abs_pos)
     }
 
-    fn build_error_token(&mut self, hint: &'static str) -> SqliteToken {
-        let (data, abs_pos) = self
-            .cursor
-            .build_error_token_info(|ch| !is_separate_token_start(ch) && !ch.is_whitespace());
+    /// `consume` variable tells us if we should continue consuming characters to reach the
+    /// beginnning of next token before building the error token or to build it right away.
+    fn build_error_token(&mut self, hint: &'static str, consume: bool) -> SqliteToken {
+        let (data, abs_pos) = self.cursor.build_error_token_info(|ch| {
+            !is_separate_token_start(ch) && !ch.is_whitespace() && consume
+        });
 
         self.errors.push(LexError {
             message: hint,
@@ -476,4 +519,46 @@ fn can_lex_real_literal() {
     check!("1.1e11", [REAL_LIT]);
     check!(".1e-1_1", [REAL_LIT]);
     check!(".1e+1", [REAL_LIT]);
+}
+
+#[test]
+fn can_lex_str_literal() {
+    check!("'1234.567'", [STR_LIT]);
+    check!("'BLAH'", [STR_LIT]);
+}
+
+#[test]
+fn can_lex_blob_literal() {
+    check!("x''", [BLOB_LIT]);
+    check!("X''", [BLOB_LIT]);
+
+    check!("x'1'", [ERROR]); // Blob lit needs at least two items in it
+    check!("x'22'", [BLOB_LIT]);
+    check!("x'afff'", [BLOB_LIT]);
+    check!("x'GG'", [ERROR]);
+    check!("x'AbCdEf12345678'", [BLOB_LIT]);
+    check!("x'AbCdEf12345678", [ERROR]); // not terminated
+    check!("x'", [ERROR]);
+}
+
+#[test]
+fn can_lex_keywords() {
+    check!("true", [KW_TRUE]);
+    check!(
+        "true FalSe SELECT select",
+        [KW_TRUE, WHITESPACE, KW_FALSE, WHITESPACE, KW_SELECT, WHITESPACE, KW_SELECT]
+    );
+    check!("'true'", [STR_LIT]);
+    check!(
+        "NULL$ CURRENT_TIMESTAMPaa NULL CURRENT_TIMESTAMP",
+        [
+            IDEN,
+            WHITESPACE,
+            IDEN,
+            WHITESPACE,
+            KW_NULL,
+            WHITESPACE,
+            KW_CURRENT_TIMESTAMP
+        ]
+    );
 }
