@@ -1,22 +1,49 @@
-use crate::{SqliteTokenKind, SqliteTreeKind};
+use crate::{SqliteParseError, SqliteTokenKind, SqliteTreeKind};
+use enumset::EnumSet;
 use smol_str::SmolStr;
 use std::fmt::Write;
 
 /// Tree and Token node terminology comes from matklad's [error resilient parser article]
 /// (https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html)
-pub struct SqliteUntypedAst(Vec<SqliteNode>);
+pub struct SqliteUntypedAst {
+    nodes: Vec<SqliteNode>,
+    pub errors: Vec<SqliteParseError>,
+}
 
 #[derive(Debug)]
 pub enum SqliteNode {
-    Tree {
-        kind: SqliteTreeKind,
-        children: Vec<NodeId>,
-        parent: Option<NodeId>,
-    },
-    Token {
-        token: SqliteToken,
-        parent: NodeId,
-    },
+    Tree(TreeChild),
+    Token(TokenChild),
+    Error(ErrorChild),
+}
+
+#[derive(Debug)]
+pub struct TreeChild {
+    pub kind: SqliteTreeKind,
+    pub children: Vec<NodeId>,
+    pub parent: Option<NodeId>,
+    pub idx: NodeId,
+}
+
+#[derive(Debug)]
+pub struct TokenChild {
+    pub token: SqliteToken,
+    pub parent: NodeId,
+    pub idx: NodeId,
+}
+
+#[derive(Debug)]
+pub struct ErrorChild {
+    pub error_idx: u16,
+    pub children: Vec<NodeId>,
+    pub parent: Option<NodeId>,
+    pub idx: NodeId,
+}
+
+impl TokenChild {
+    fn full_text(&self, text: &mut String) {
+        text.push_str(&self.token.text);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -26,39 +53,77 @@ pub struct SqliteToken {
     pub abs_pos: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(usize);
+
+pub struct AncestorIter<'a> {
+    curr: Option<&'a SqliteNode>,
+    ast: &'a SqliteUntypedAst,
+}
+
+pub struct NodePrinter<'a> {
+    node: &'a SqliteNode,
+    ast: &'a SqliteUntypedAst,
+}
+
+impl<'a> Iterator for AncestorIter<'a> {
+    type Item = (NodeId, &'a SqliteNode);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let parent = self.curr?.parent().map(|it| (it, it.as_node(self.ast)));
+        self.curr = parent.map(|(_parent_id, parent)| parent);
+
+        return parent;
+    }
+}
 
 impl SqliteUntypedAst {
     pub fn root(&self) -> &SqliteNode {
-        debug_assert!(!self.0.is_empty());
-
-        &self.0[0]
+        debug_assert!(!self.nodes.is_empty());
+        &self.nodes[0]
     }
 
-    pub fn nodes(&self) -> &[SqliteNode] {
-        self.0.as_slice()
+    pub fn nodes(&self) -> impl DoubleEndedIterator<Item = (NodeId, &SqliteNode)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(idx, node)| (NodeId::new(idx), node))
     }
 
-    pub fn allocate(&mut self, node: SqliteNode) -> NodeId {
-        self.0.push(node);
+    pub fn allocate(&mut self, node: SqliteNode) {
+        self.nodes.push(node);
+    }
 
-        NodeId(self.0.len() - 1)
+    pub fn next_idx(&self) -> NodeId {
+        NodeId(self.nodes.len())
     }
 
     pub fn node_ref(&self, id: NodeId) -> &SqliteNode {
-        &self.0[id.0]
+        &self.nodes[id.0]
     }
 
     pub fn new() -> Self {
-        SqliteUntypedAst(Vec::new())
+        SqliteUntypedAst {
+            nodes: Vec::new(),
+            errors: Vec::new(),
+        }
     }
 
-    pub fn tree_node_mut(&mut self, id: NodeId) -> &mut SqliteNode {
-        match &mut self.0[id.0] {
-            node @ SqliteNode::Tree { .. } => node,
+    pub fn find_associated_err(&self, node: &SqliteNode) -> Option<&SqliteParseError> {
+        node.error_child()
+            .and_then(|it| self.errors.get(it.error_idx as usize))
+    }
+
+    pub fn add_child(&mut self, parent: NodeId, child: NodeId) {
+        match &mut self.nodes[parent.0] {
+            node @ SqliteNode::Tree { .. } => node.add_child(child),
+            node @ SqliteNode::Error { .. } => node.add_child(child),
             _ => panic!("Node is a not a tree node"),
         }
+    }
+
+    pub fn add_errors(&mut self, mut errors: Vec<SqliteParseError>) {
+        self.errors = std::mem::take(&mut errors)
     }
 }
 
@@ -70,18 +135,29 @@ impl std::fmt::Debug for SqliteUntypedAst {
     }
 }
 
+impl<'a> std::fmt::Debug for NodePrinter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut buf = String::new();
+        self.node.print(&mut buf, 0, self.ast);
+        write!(f, "{}", buf)
+    }
+}
+
 impl NodeId {
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
     pub fn add_tree_child<'i, 'a>(
         &self,
         ast: &mut SqliteUntypedAst,
         kind: SqliteTreeKind,
     ) -> NodeId {
-        let child_id = ast.allocate(SqliteNode::new_tree_node(kind, Some(*self)));
+        let child_idx = ast.next_idx();
+        ast.allocate(SqliteNode::new_tree_node(kind, Some(*self), child_idx));
 
-        let curr_node = ast.tree_node_mut(*self);
-        curr_node.add_child(child_id);
+        ast.add_child(*self, child_idx);
 
-        child_id
+        child_idx
     }
 
     pub fn add_token_child<'i, 'a>(
@@ -89,12 +165,25 @@ impl NodeId {
         ast: &mut SqliteUntypedAst,
         token: SqliteToken,
     ) -> NodeId {
-        let child_id = ast.allocate(SqliteNode::new_token_node(token, *self));
+        let child_idx = ast.next_idx();
+        ast.allocate(SqliteNode::new_token_node(token, *self, child_idx));
 
-        let curr_node = ast.tree_node_mut(*self);
-        curr_node.add_child(child_id);
+        ast.add_child(*self, child_idx);
 
-        child_id
+        child_idx
+    }
+
+    pub fn add_error_child<'i, 'a>(&self, ast: &mut SqliteUntypedAst, error_idx: u16) -> NodeId {
+        let child_idx = ast.next_idx();
+        ast.allocate(SqliteNode::new_error_node(
+            error_idx,
+            Some(*self),
+            child_idx,
+        ));
+
+        ast.add_child(*self, child_idx);
+
+        child_idx
     }
 
     pub fn as_node<'i, 'a>(&self, ast: &'a SqliteUntypedAst) -> &'a SqliteNode {
@@ -102,69 +191,51 @@ impl NodeId {
     }
 }
 
-impl SqliteNode {
-    pub fn new_tree_node(kind: SqliteTreeKind, parent: Option<NodeId>) -> Self {
-        Self::Tree {
-            kind,
-            children: Vec::new(),
-            parent,
-        }
+impl From<usize> for NodeId {
+    fn from(value: usize) -> Self {
+        NodeId(value)
     }
+}
 
-    pub fn new_token_node(token: SqliteToken, parent: NodeId) -> Self {
-        Self::Token { token, parent }
-    }
-
-    /// # Panics
-    /// Panics if the node is not a tree node
+impl ErrorChild {
     pub fn children<'a>(
         &'a self,
         ast: &'a SqliteUntypedAst,
-    ) -> impl Iterator<Item = &'a SqliteNode> {
-        match self {
-            Self::Tree { children, .. } => children.iter().map(|child_id| child_id.as_node(ast)),
-            Self::Token { .. } => panic!("DEV ERROR: Cannot call children on token nodes"),
-        }
+    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
+        self.children.iter().map(|child_id| child_id.as_node(ast))
     }
 
-    pub fn add_child(&mut self, child: NodeId) {
-        match self {
-            Self::Tree { children, .. } => children.push(child),
-            Self::Token { .. } => panic!("Cannot add child to token node"),
+    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
+        for child in self.children(ast) {
+            child.full_text(ast, text);
         }
     }
+}
 
-    fn print(&self, buf: &mut String, level: usize, ast: &SqliteUntypedAst) {
-        let indent = "  ".repeat(level);
-
-        match self {
-            Self::Tree { kind, .. } => {
-                std::write!(buf, "{indent}{:?}\n", kind).unwrap();
-                for child in self.children(ast) {
-                    child.print(buf, level + 1, ast)
-                }
-            }
-            Self::Token { token, .. } => {
-                if !token.is_trivia() {
-                    std::write!(buf, "{indent}  '{}` - {:?}\n", token.text, token.kind).unwrap();
-                }
-            }
-        }
-        assert!(buf.ends_with('\n'));
+impl TreeChild {
+    pub fn children<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
+        self.children.iter().map(|child_id| child_id.as_node(ast))
     }
 
-    pub fn parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Tree { parent, .. } => parent.clone(),
-            Self::Token { parent, .. } => Some(*parent),
-        }
+    pub fn non_trivial_children<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
+        self.children
+            .iter()
+            .map(|child_id| child_id.as_node(ast))
+            .filter(|it| !it.is_trivial_node())
     }
 
-    pub fn tree_kind(&self) -> Option<SqliteTreeKind> {
-        match self {
-            Self::Tree { kind, .. } => Some(*kind),
-            _ => None,
-        }
+    pub fn valid_children<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
+        self.children(ast)
+            .filter(|it| !it.is_trivial_node() && it.error_child().is_none())
     }
 
     pub fn find_child<'a>(
@@ -175,6 +246,75 @@ impl SqliteNode {
         key.find_children(self, ast).next()
     }
 
+    pub fn find_token_child<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        key: SqliteTokenKind,
+    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
+        self.children(ast)
+            .filter(move |child| child.token_kind() == Some(key))
+    }
+
+    pub fn find_token_child_any<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        key: EnumSet<SqliteTokenKind>,
+    ) -> Option<&'a SqliteNode> {
+        self.children(ast).find_map(|it| match it {
+            SqliteNode::Token(leaf) => {
+                if key.contains(leaf.token.kind) {
+                    Some(it)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// NOTE: Trival tokens
+    pub fn find_token_group<'a, T: PartialEq + Copy>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        needle: &[T],
+        func: impl Fn(&'a SqliteToken, T) -> bool,
+    ) -> Option<&[NodeId]> {
+        assert!(!needle.is_empty());
+
+        'outer: for window_start_idx in 0..self.children.len() {
+            let mut window = self.children[window_start_idx..]
+                .iter()
+                .map(|it| it.as_node(ast).token_child());
+
+            let mut result_group_end = window_start_idx;
+
+            let mut needle_iter = needle.iter().peekable();
+
+            while let Some(n) = needle_iter.peek() {
+                // NOTE: The order of these match clauses matter. We allow having trivial token
+                // kinds in the needle. As
+                match window.next().flatten() {
+                    Some(TokenChild { token, .. }) if func(token, **n) => {
+                        needle_iter.next();
+                        result_group_end += 1
+                    }
+                    // We only include trivial tokens in the result group if they result group
+                    // already contains a non trivial token (i.e. our result group length > 0)
+                    Some(TokenChild { token, .. })
+                        if token.is_trivia() && result_group_end != window_start_idx =>
+                    {
+                        result_group_end += 1;
+                    }
+                    _ => continue 'outer,
+                }
+            }
+
+            return Some(&self.children[window_start_idx..result_group_end]);
+        }
+
+        None
+    }
+
     pub fn find_children<'a>(
         &'a self,
         ast: &'a SqliteUntypedAst,
@@ -183,45 +323,312 @@ impl SqliteNode {
         key.find_children(self, ast)
     }
 
+    /// NOTE: Trival tokens
+    pub fn find_token_kind_group<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        needle: &[SqliteTokenKind],
+    ) -> Option<&[NodeId]> {
+        self.find_token_group(ast, needle, |lhs, rhs| lhs.kind == rhs)
+    }
+
+    /// WARNING: Skips trival nodes, case insensitive
+    pub fn find_token_text_group<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        needle: &[&'static str],
+    ) -> Option<&'a [NodeId]> {
+        self.find_token_group(ast, needle, |lhs, rhs| lhs.text_matches(rhs))
+    }
+
+    pub fn find_token_text<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+        text_to_find: &'static str,
+    ) -> Option<&'a SqliteNode> {
+        self.children(ast).find(|it| {
+            it.token_child()
+                .is_some_and(|it| it.token.text_matches(text_to_find))
+        })
+    }
+
+    pub fn first_token_descendant<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+    ) -> Option<&'a TokenChild> {
+        let childless_parent = |node: &&SqliteNode| match node {
+            SqliteNode::Error(n) => n.children.is_empty(),
+            SqliteNode::Tree(n) => n.children.is_empty(),
+            _ => false,
+        };
+
+        let mut curr_node = self.children(ast).skip_while(childless_parent).next();
+
+        loop {
+            match curr_node {
+                Some(SqliteNode::Tree(tree)) => {
+                    curr_node = tree.children(ast).skip_while(childless_parent).next();
+                }
+                Some(SqliteNode::Error(err)) => {
+                    curr_node = err.children(ast).skip_while(childless_parent).next();
+                }
+                Some(SqliteNode::Token(leaf)) => return Some(leaf),
+                None => return None,
+            }
+        }
+    }
+
+    pub fn last_token_descendant<'a>(
+        &'a self,
+        ast: &'a SqliteUntypedAst,
+    ) -> Option<&'a TokenChild> {
+        let childless_parent = |node: &&SqliteNode| match node {
+            SqliteNode::Error(n) => n.children.is_empty(),
+            SqliteNode::Tree(n) => n.children.is_empty(),
+            _ => false,
+        };
+
+        let mut curr_node = self.children(ast).rev().skip_while(childless_parent).next();
+
+        loop {
+            match curr_node {
+                Some(SqliteNode::Tree(tree)) => {
+                    curr_node = tree.children(ast).rev().skip_while(childless_parent).next();
+                }
+                Some(SqliteNode::Error(err)) => {
+                    curr_node = err.children(ast).rev().skip_while(childless_parent).next();
+                }
+                Some(SqliteNode::Token(leaf)) => return Some(leaf),
+                None => return None,
+            }
+        }
+    }
+
+    pub fn node_start(&self, ast: &SqliteUntypedAst) -> Option<u32> {
+        self.first_token_descendant(&ast).map(|n| n.token.start())
+    }
+
+    pub fn node_end(&self, ast: &SqliteUntypedAst) -> Option<u32> {
+        self.last_token_descendant(&ast).map(|n| n.token.end())
+    }
+
+    pub fn node_range(&self, ast: &SqliteUntypedAst) -> Option<(u32, u32)> {
+        let start = self.node_start(ast)?;
+        let end = self.node_end(ast)?;
+
+        Some((start, end))
+    }
+
+    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
+        for child in self.children(ast) {
+            child.full_text(ast, text);
+        }
+    }
+}
+
+impl SqliteNode {
+    pub fn new_tree_node(kind: SqliteTreeKind, parent: Option<NodeId>, idx: NodeId) -> Self {
+        Self::Tree(TreeChild {
+            kind,
+            children: Vec::new(),
+            parent,
+            idx,
+        })
+    }
+
+    fn new_error_node(error_idx: u16, parent: Option<NodeId>, idx: NodeId) -> SqliteNode {
+        Self::Error(ErrorChild {
+            error_idx,
+            children: Vec::new(),
+            parent,
+            idx,
+        })
+    }
+
+    pub fn new_token_node(token: SqliteToken, parent: NodeId, idx: NodeId) -> Self {
+        Self::Token(TokenChild { token, parent, idx })
+    }
+
+    pub fn tree_child(&self) -> Option<&TreeChild> {
+        match self {
+            SqliteNode::Tree(tree) => Some(tree),
+            _ => None,
+        }
+    }
+
+    pub fn error_child(&self) -> Option<&ErrorChild> {
+        match self {
+            SqliteNode::Error(err) => Some(err),
+            _ => None,
+        }
+    }
+
+    pub fn token_child(&self) -> Option<&TokenChild> {
+        match self {
+            SqliteNode::Token(leaf) => Some(leaf),
+            _ => None,
+        }
+    }
+
+    pub fn add_child(&mut self, child: NodeId) {
+        match self {
+            Self::Tree(tree) => tree.children.push(child),
+            Self::Error(err) => err.children.push(child),
+            Self::Token { .. } => panic!("Cannot add child to token node"),
+        }
+    }
+
+    fn print(&self, buf: &mut String, level: usize, ast: &SqliteUntypedAst) {
+        let indent = "  ".repeat(level);
+
+        match self {
+            Self::Tree(tree) => {
+                std::write!(buf, "{indent}{:?}\n", tree.kind).unwrap();
+                for child in tree.children(ast) {
+                    child.print(buf, level + 1, ast)
+                }
+            }
+            Self::Error(err) => {
+                std::write!(buf, "{indent}{:?}\n", "Error").unwrap();
+                for child in err.children(ast) {
+                    child.print(buf, level + 1, ast)
+                }
+            }
+            Self::Token(leaf) => {
+                if !leaf.token.is_trivia() {
+                    std::write!(
+                        buf,
+                        "{indent}'{}` - {:?}\n",
+                        leaf.token.text,
+                        leaf.token.kind
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        assert!(buf.ends_with('\n'));
+    }
+
+    pub fn parent(&self) -> Option<NodeId> {
+        match self {
+            Self::Tree(tree) => tree.parent,
+            Self::Error(err) => err.parent,
+            Self::Token(leaf) => Some(leaf.parent),
+        }
+    }
+
+    pub fn idx(&self) -> NodeId {
+        match self {
+            SqliteNode::Tree(tree_child) => tree_child.idx,
+            SqliteNode::Token(token_child) => token_child.idx,
+            SqliteNode::Error(error_child) => error_child.idx,
+        }
+    }
+
+    pub fn ancestors<'a>(&'a self, ast: &'a SqliteUntypedAst) -> AncestorIter<'a> {
+        AncestorIter {
+            curr: Some(self),
+            ast,
+        }
+    }
+
+    pub fn parent_as_node<'a>(&'a self, ast: &'a SqliteUntypedAst) -> Option<&'a SqliteNode> {
+        self.parent().map(|n_id| n_id.as_node(ast))
+    }
+
+    pub fn tree_kind(&self) -> Option<SqliteTreeKind> {
+        match self {
+            Self::Tree(tree) => Some(tree.kind),
+            _ => None,
+        }
+    }
+
     pub fn token_kind(&self) -> Option<SqliteTokenKind> {
         match self {
-            Self::Token { token, .. } => Some(token.kind),
+            Self::Token(leaf) => Some(leaf.token.kind),
             _ => None,
+        }
+    }
+
+    pub fn token_text(&self) -> Option<&str> {
+        match self {
+            Self::Token(leaf) => Some(leaf.token.text.as_str()),
+            _ => None,
+        }
+    }
+
+    // TODO: Optimize
+    pub fn as_str(&self) -> &str {
+        match self {
+            SqliteNode::Tree(tree) => tree.kind.into(),
+            SqliteNode::Token(leaf) => leaf.token.kind.as_str(),
+            SqliteNode::Error(_) => "Error",
+        }
+    }
+
+    pub fn printer<'a>(&'a self, ast: &'a SqliteUntypedAst) -> NodePrinter<'a> {
+        NodePrinter { node: self, ast }
+    }
+
+    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
+        match self {
+            SqliteNode::Tree(tree) => tree.full_text(ast, text),
+            SqliteNode::Token(token) => token.full_text(text),
+            SqliteNode::Error(err) => err.full_text(ast, text),
+        }
+    }
+
+    pub fn is_trivial_node(&self) -> bool {
+        matches!(self, SqliteNode::Token(leaf) if leaf.token.is_trivia())
+    }
+
+    pub fn has_parse_error(&self, ast: &SqliteUntypedAst) -> bool {
+        match self {
+            SqliteNode::Error(_) => true,
+            SqliteNode::Tree(tree) => tree.children(ast).any(|it| it.has_parse_error(ast)),
+            SqliteNode::Token(_) => false,
         }
     }
 }
 
 pub trait ChildNodeKey {
-    fn find_children<'i, 'a>(
+    fn find_children<'a>(
         self,
-        node: &'a SqliteNode,
+        node: &'a TreeChild,
         ast: &'a SqliteUntypedAst,
     ) -> impl Iterator<Item = &'a SqliteNode>;
 }
 
 impl ChildNodeKey for SqliteTokenKind {
-    fn find_children<'i, 'a>(
+    fn find_children<'a>(
         self,
-        node: &'a SqliteNode,
+        node: &'a TreeChild,
         ast: &'a SqliteUntypedAst,
     ) -> impl Iterator<Item = &'a SqliteNode> {
-        assert!(matches!(node, SqliteNode::Tree { .. }));
-
         node.children(ast)
             .filter(move |child| child.token_kind() == Some(self))
     }
 }
 
 impl ChildNodeKey for SqliteTreeKind {
-    fn find_children<'i, 'a>(
+    fn find_children<'a>(
         self,
-        node: &'a SqliteNode,
+        node: &'a TreeChild,
         ast: &'a SqliteUntypedAst,
     ) -> impl Iterator<Item = &'a SqliteNode> {
-        assert!(matches!(node, SqliteNode::Tree { .. }));
-
         node.children(ast)
             .filter(move |child| child.tree_kind() == Some(self))
+    }
+}
+
+impl ChildNodeKey for EnumSet<SqliteTokenKind> {
+    fn find_children<'a>(
+        self,
+        node: &'a TreeChild,
+        ast: &'a SqliteUntypedAst,
+    ) -> impl Iterator<Item = &'a SqliteNode> {
+        node.children(ast)
+            .filter(move |child| child.token_kind().is_some_and(|it| self.contains(it)))
     }
 }
 
@@ -238,23 +645,16 @@ impl SqliteToken {
         (self.abs_pos, self.abs_pos + self.text.len() as u32 - 1)
     }
 
-    pub fn start_range(&self) -> (u32, u32) {
-        (self.abs_pos, self.abs_pos)
+    pub fn start(&self) -> u32 {
+        self.abs_pos
     }
 
-    pub fn end_range(&self) -> (u32, u32) {
-        let end = self.abs_pos + self.text.len() as u32;
-
-        (end, end)
+    pub fn end(&self) -> u32 {
+        self.abs_pos + self.text.len() as u32
     }
 
     pub fn is_trivia(&self) -> bool {
-        matches!(
-            self.kind,
-            SqliteTokenKind::WHITESPACE
-                | SqliteTokenKind::S_LINE_COMMENT
-                | SqliteTokenKind::M_LINE_COMMENT
-        )
+        self.kind.is_trivia()
     }
 
     pub fn is_eof(&self) -> bool {
@@ -265,196 +665,7 @@ impl SqliteToken {
         matches!(self.kind, SqliteTokenKind::ERROR)
     }
 
-    pub fn as_str(&self) -> &str {
-        use SqliteTokenKind::*;
-
-        match self.kind {
-            KW_ABORT => "ABORT",
-            KW_ACTION => "ACTION",
-            KW_ADD => "ADD",
-            KW_AFTER => "AFTER",
-            KW_ALL => "ALL",
-            KW_ALTER => "ALTER",
-            KW_ALWAYS => "ALWAYS",
-            KW_ANALYZE => "ANALYZE",
-            KW_AND => "AND",
-            KW_AS => "AS",
-            KW_ASC => "ASC",
-            KW_ATTACH => "ATTACH",
-            KW_AUTOINCREMENT => "AUTOINCREMENT",
-            KW_BEFORE => "BEFORE",
-            KW_BEGIN => "BEGIN",
-            KW_BETWEEN => "BETWEEN",
-            KW_BY => "BY",
-            KW_CASCADE => "CASCADE",
-            KW_CASE => "CASE",
-            KW_CAST => "CAST",
-            KW_CHECK => "CHECK",
-            KW_COLLATE => "COLLATE",
-            KW_COLUMN => "COLUMN",
-            KW_COMMIT => "COMMIT",
-            KW_CONFLICT => "CONFLICT",
-            KW_CONSTRAINT => "CONSTRAINT",
-            KW_CREATE => "CREATE",
-            KW_CROSS => "CROSS",
-            KW_CURRENT => "CURRENT",
-            KW_CURRENT_DATE => "CURRENT_DATE",
-            KW_CURRENT_TIME => "CURRENT_TIME",
-            KW_CURRENT_TIMESTAMP => "CURRENT_TIMESTAMP",
-            KW_DATABASE => "DATABASE",
-            KW_DEFAULT => "DEFAULT",
-            KW_DEFERRABLE => "DEFERRABLE",
-            KW_DEFERRED => "DEFERRED",
-            KW_DELETE => "DELETE",
-            KW_DESC => "DESC",
-            KW_DETACH => "DETACH",
-            KW_DISTINCT => "DISTINCT",
-            KW_DO => "DO",
-            KW_DROP => "DROP",
-            KW_EACH => "EACH",
-            KW_ELSE => "ELSE",
-            KW_END => "END",
-            KW_ESCAPE => "ESCAPE",
-            KW_EXCEPT => "EXCEPT",
-            KW_EXCLUDE => "EXCLUDE",
-            KW_EXCLUSIVE => "EXCLUSIVE",
-            KW_EXISTS => "EXISTS",
-            KW_EXPLAIN => "EXPLAIN",
-            KW_FAIL => "FAIL",
-            KW_FILTER => "FILTER",
-            KW_FIRST => "FIRST",
-            KW_FOLLOWING => "FOLLOWING",
-            KW_FOR => "FOR",
-            KW_FOREIGN => "FOREIGN",
-            KW_FROM => "FROM",
-            KW_FULL => "FULL",
-            KW_GENERATED => "GENERATED",
-            KW_GLOB => "GLOB",
-            KW_GROUP => "GROUP",
-            KW_GROUPS => "GROUPS",
-            KW_HAVING => "HAVING",
-            KW_IF => "IF",
-            KW_IGNORE => "IGNORE",
-            KW_IMMEDIATE => "IMMEDIATE",
-            KW_IN => "IN",
-            KW_INDEX => "INDEX",
-            KW_INDEXED => "INDEXED",
-            KW_INITIALLY => "INITIALLY",
-            KW_INNER => "INNER",
-            KW_INSERT => "INSERT",
-            KW_INSTEAD => "INSTEAD",
-            KW_INTERSECT => "INTERSECT",
-            KW_INTO => "INTO",
-            KW_IS => "IS",
-            KW_ISNULL => "ISNULL",
-            KW_JOIN => "JOIN",
-            KW_KEY => "KEY",
-            KW_LAST => "LAST",
-            KW_LEFT => "LEFT",
-            KW_LIKE => "LIKE",
-            KW_LIMIT => "LIMIT",
-            KW_MATCH => "MATCH",
-            KW_MATERIALIZED => "MATERIALIZED",
-            KW_NATURAL => "NATURAL",
-            KW_NO => "NO",
-            KW_NOT => "NOT",
-            KW_NOTHING => "NOTHING",
-            KW_NOTNULL => "NOTNULL",
-            KW_NULL => "NULL",
-            KW_NULLS => "NULLS",
-            KW_OF => "OF",
-            KW_OFFSET => "OFFSET",
-            KW_ON => "ON",
-            KW_OR => "OR",
-            KW_ORDER => "ORDER",
-            KW_OTHERS => "OTHERS",
-            KW_OUTER => "OUTER",
-            KW_OVER => "OVER",
-            KW_PARTITION => "PARTITION",
-            KW_PLAN => "PLAN",
-            KW_PRAGMA => "PRAGMA",
-            KW_PRECEDING => "PRECEDING",
-            KW_PRIMARY => "PRIMARY",
-            KW_QUERY => "QUERY",
-            KW_RAISE => "RAISE",
-            KW_RANGE => "RANGE",
-            KW_RECURSIVE => "RECURSIVE",
-            KW_REFERENCES => "REFERENCES",
-            KW_REGEXP => "REGEXP",
-            KW_REINDEX => "REINDEX",
-            KW_RELEASE => "RELEASE",
-            KW_RENAME => "RENAME",
-            KW_REPLACE => "REPLACE",
-            KW_RESTRICT => "RESTRICT",
-            KW_RETURNING => "RETURNING",
-            KW_RIGHT => "RIGHT",
-            KW_ROLLBACK => "ROLLBACK",
-            KW_ROW => "ROW",
-            KW_ROWS => "ROWS",
-            KW_SAVEPOINT => "SAVEPOINT",
-            KW_SELECT => "SELECT",
-            KW_SET => "SET",
-            KW_TABLE => "TABLE",
-            KW_TEMP => "TEMP",
-            KW_TEMPORARY => "TEMPORARY",
-            KW_THEN => "THEN",
-            KW_TIES => "TIES",
-            KW_TO => "TO",
-            KW_TRANSACTION => "TRANSACTION",
-            KW_TRIGGER => "TRIGGER",
-            KW_UNBOUNDED => "UNBOUNDED",
-            KW_UNION => "UNION",
-            KW_UNIQUE => "UNIQUE",
-            KW_UPDATE => "UPDATE",
-            KW_USING => "USING",
-            KW_VACUUM => "VACUUM",
-            KW_VALUES => "VALUES",
-            KW_VIEW => "VIEW",
-            KW_VIRTUAL => "VIRTUAL",
-            KW_WHEN => "WHEN",
-            KW_WHERE => "WHERE",
-            KW_WINDOW => "WINDOW",
-            KW_WITH => "WITH",
-            KW_WITHOUT => "WITHOUT",
-            WHITESPACE => self.text.as_str(),
-            S_LINE_COMMENT => self.text.as_str(),
-            M_LINE_COMMENT => self.text.as_str(),
-            STR_LIT => self.text.as_str(),
-            REAL_LIT => self.text.as_str(),
-            IDEN => self.text.as_str(),
-            DOT => ".",
-            STAR => "*",
-            L_PAREN => "(",
-            R_PAREN => ")",
-            COMMA => ",",
-            SEMICOLON => ";",
-            COLON => ":",
-            EQ_SQL => "=",
-            EQ => "==",
-            NOT_EQ_SQL => "<>",
-            NOT_EQ => "!=",
-            PLUS => "+",
-            MINUS => "-",
-            F_SLASH => "/",
-            PERCENT => "%",
-            EOF => "",
-            EXTRACT_TWO => "->>",
-            EXTRACT_ONE => "->",
-            L_CHEV => "<",
-            R_CHEV => ">",
-            L_CHEV_EQ => "<=",
-            R_CHEV_EQ => ">=",
-            DOUBLE_PIPE => "||",
-            TILDA => "~",
-            L_CHEV_TWO => "<<",
-            R_CHEV_TWO => ">>",
-            PIPE => "|",
-            AMPERSAND => "&",
-            Q_MARK => "?",
-            AT_MARK => "@",
-            INT_LIT => self.text.as_str(),
-            HEX_LIT => self.text.as_str(),
-            ERROR => self.text.as_str(),
-        }
+    pub fn text_matches(&self, other: &str) -> bool {
+        self.text.eq_ignore_ascii_case(other)
     }
 }
