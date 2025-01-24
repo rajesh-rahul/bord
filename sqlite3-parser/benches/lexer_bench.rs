@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use yukon_sqlite3_parser::{SqliteLexer, SqliteVersion};
 use sqlite3_parser::lexer::{sql::Tokenizer, Scanner};
+use bord_sqlite3_parser::{SqliteLexer, SqliteVersion};
 
 fn lexer_benchmark(c: &mut Criterion) {
     // Create a benchmark group
@@ -15,7 +15,7 @@ fn lexer_benchmark(c: &mut Criterion) {
     println!("{:?}", tokens);
 
     // Benchmark the lexer in your project
-    group.bench_function("Yksql Lexer", |b| {
+    group.bench_function("bordSQL Lexer", |b| {
         b.iter(|| {
             let lexer = SqliteLexer::new(input_sql, SqliteVersion([3, 46, 0]));
             let _ = lexer.lex();
