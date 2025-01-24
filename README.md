@@ -1,4 +1,4 @@
-# Yukon SQLite Toolkit
+# Bord SQLite Toolkit
 
 ## Credits
 
