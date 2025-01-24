@@ -1,17 +1,22 @@
 [package]
-name = "yukon-server"
+name = "bord-server"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
-crossbeam = "0.8.4"
 hashbrown = "0.14.5"
 line-index = "0.1.1"
-lsp-server = "0.7.6"
-lsp-types = "0.94.0"
-serde = "1.0.203"
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-yukon-sqlite3-parser = { path = "../sqlite3-parser" }
+bord-sqlite3-parser = { path = "../sqlite3-parser" }
+itertools = "0.14.0"
+tower-lsp = { features = ["tokio"], git = "https://github.com/rajesh-rahul/tower-lsp" }
+dashmap = "6.1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"]}
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rstest.workspace = true

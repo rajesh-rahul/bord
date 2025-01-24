@@ -1,4 +1,4 @@
-use lsp_types::*;
+use tower_lsp::lsp_types::*;
 
 pub fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
@@ -7,7 +7,7 @@ pub fn server_capabilities() -> ServerCapabilities {
         )),
         completion_provider: Some(CompletionOptions {
             resolve_provider: Some(false),
-            trigger_characters: Some(vec![".".to_string()]),
+            trigger_characters: Some(vec![".".to_string(), " ".to_string(), "\n".to_string()]),
             work_done_progress_options: Default::default(),
             all_commit_characters: None,
             ..Default::default()

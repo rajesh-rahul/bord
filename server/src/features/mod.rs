@@ -1,4 +1,5 @@
 mod completion;
 mod diagnostics;
 
-pub use diagnostics::publish_diagnosics;
+pub(crate) use completion::create_completion_context;
+// pub use diagnostics::publish_diagnosics;

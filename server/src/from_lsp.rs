@@ -1,6 +1,6 @@
 use anyhow::format_err;
 use line_index::{LineIndex, TextRange, TextSize, WideLineCol};
-use lsp_types as lsp;
+use tower_lsp::lsp_types as lsp;
 
 /// Convert (line, column) for a particular text document into an offset value from the start
 /// of the text document.

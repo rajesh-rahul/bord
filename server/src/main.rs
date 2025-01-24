@@ -1,105 +1,98 @@
 use capabilities::server_capabilities;
 mod capabilities;
-pub mod features;
+mod features;
 mod from_lsp;
-mod notifications;
-mod requests;
-mod responses;
-mod utils;
 mod vfs;
-pub type Result<T> = anyhow::Result<T>;
+mod text_document;
 
-use crossbeam::select;
-use lsp_server::{Connection, Message};
+// pub type Result<T> = anyhow::Result<T>;
 
-#[derive(Default, Debug)]
-struct YkLangServer {
+#[derive(Debug)]
+struct BordLangServer {
+    client: Client,
     vfs: vfs::Vfs,
 }
 
-pub struct YkConnection {
-    pub lsp_client: Connection,
-    pub workers_recv: crossbeam::channel::Receiver<String>,
-    pub workers_send: crossbeam::channel::Sender<String>,
-}
+use tower_lsp::lsp_types as lsp;
+use tower_lsp::jsonrpc::Result;
+use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-fn main() -> anyhow::Result<()> {
-    tracing::info!("Starting YkSQL Language Server");
-
-    let (conn, io_threads) = Connection::stdio();
-
-    let (workers_send, workers_recv) = crossbeam::channel::unbounded();
-
-    let conn = YkConnection {
-        lsp_client: conn,
-        workers_recv,
-        workers_send,
-    };
-
-    // Do initialization
-    let server_capabilities = serde_json::to_value(server_capabilities())?;
-    match conn.lsp_client.initialize(server_capabilities) {
-        Err(e) => {
-            if e.channel_is_disconnected() {
-                io_threads.join()?;
-            }
-            return Err(e.into());
-        }
-        _ => {}
+#[tower_lsp::async_trait]
+impl LanguageServer for BordLangServer {
+    async fn initialize(&self, _: lsp::InitializeParams) -> Result<lsp::InitializeResult> {
+        Ok(lsp::InitializeResult {
+            server_info: None,
+            capabilities: server_capabilities()
+        })
     }
 
-    let server = YkLangServer::default();
-    main_loop(conn, server)?;
-    io_threads.join()?;
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
 
-    tracing::info!("Shutting down YkSQL Language Server");
-    Ok(())
-}
+    async fn did_open(&self, params: lsp::DidOpenTextDocumentParams) {
+        self.vfs.add_new_text_document(params);
+    }
 
-pub enum Event {
-    ClientLspMsg(Message),
-    InternalMsg(String),
-}
+    async fn did_change(&self, params: lsp::DidChangeTextDocumentParams) {
+        let doc_url = params.text_document.uri.clone();
+        let version = params.text_document.version;
+        
+        let Some(mut doc) = self.vfs.files.get_mut(&doc_url) else {
+            return
+        };
 
-pub fn next_event(conn: &YkConnection) -> anyhow::Result<Event> {
-    select! {
-        recv(conn.lsp_client.receiver) -> msg => Ok(Event::ClientLspMsg(msg?)),
-        recv(conn.workers_recv) -> msg => Ok(Event::InternalMsg(msg?)),
+        if let Err(err) = doc.apply_changes(version, params.content_changes) {
+            tracing::warn!("{}", err);
+            return
+        }
+        
+        let diagnostics = doc.diagnostics.clone();
+        self.client.publish_diagnostics(doc_url, diagnostics, None).await;
+    }
+
+    async fn did_close(&self, params: lsp::DidCloseTextDocumentParams) {
+        self.vfs.close_text_document(params);
+    }
+
+    async fn completion(&self, params: lsp::CompletionParams) -> Result<Option<lsp::CompletionResponse>> {
+        let doc_pos = params.text_document_position;
+        let Some(document) = self.vfs.files.get(&doc_pos.text_document.uri) else {
+            tracing::warn!("Recieved completion request for non-existent document: {}", doc_pos.text_document.uri);
+            return Ok(None)
+        };
+        
+        // TODO: DO this properly
+        let Ok(cursor) = from_lsp::offset(
+            &document.line_index,
+            doc_pos.position.line,
+            doc_pos.position.character,
+        ) else {
+            tracing::error!("Unable to convert lsp text position");
+            return Ok(None)
+        };
+    
+        let ast = &document.ast;
+    
+        let completions = features::create_completion_context(ast, cursor)
+            .into_iter()
+            .map(|it| lsp::CompletionItem {
+                label: it,
+                kind: Some(lsp::CompletionItemKind::KEYWORD),
+                ..Default::default()
+            }).collect();
+        
+        Ok(Some(lsp::CompletionResponse::Array(completions)))
     }
 }
 
-fn main_loop(conn: YkConnection, mut server: YkLangServer) -> anyhow::Result<()> {
-    loop {
-        let event = next_event(&conn)?;
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt().with_writer(std::io::stderr).finish();
 
-        match event {
-            Event::ClientLspMsg(msg) => {
-                if let Err(err) = handle_client_lsp_msg(&conn, msg, &mut server) {
-                    eprintln!("Error handling message: {:?}", err);
-                }
-            }
-            Event::InternalMsg(_) => {
-                eprintln!("Received internal message");
-            }
-        }
-    }
-}
+    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
 
-fn handle_client_lsp_msg(
-    conn: &YkConnection,
-    msg: Message,
-    server: &mut YkLangServer,
-) -> anyhow::Result<()> {
-    match msg {
-        Message::Request(req) => {
-            if conn.lsp_client.handle_shutdown(&req)? {
-                return Ok(());
-            }
-            requests::handle(&conn, req, server)?;
-        }
-        Message::Response(res) => responses::handle(&conn, res, server)?,
-        Message::Notification(not) => notifications::handle(&conn, not, server)?,
-    };
+    let (service, socket) = LspService::new(|client| BordLangServer { client, vfs: Default::default() });
 
-    Ok(())
+    Server::new(stdin, stdout, socket).serve(service).await;
 }
