@@ -1,7 +1,6 @@
-// If a node contains multiple identical children and any one of them is optional, it is illegal
+// TODO: Enforce - If a node contains multiple identical children and any one of them is optional, it is illegal
 
-File = 
-    (Statement ';')*
+File = (Statement ';')*
 
 Statement = 
     ExplainClause? statement_kind: (StatementNoCte | StatementWithCte)
@@ -23,10 +22,10 @@ AlterTableStmt =
     alter_table_kind: (RenameTable | RenameColumn | AddColumn | DropColumn)
 
 RenameTable = 
-    'KW_RENAME' 'KW_TO' TableNameDef
+    'KW_RENAME' 'KW_TO' TableName
 
 RenameColumn = 
-    'KW_RENAME' 'KW_COLUMN'? old_name: ColumnName 'KW_TO' new_name: ColumnNameDef
+    'KW_RENAME' 'KW_COLUMN'? old_name: ColumnName 'KW_TO' new_name: ColumnName
 
 AddColumn = 
     'KW_ADD' 'KW_COLUMN'? ColumnDef
@@ -35,30 +34,33 @@ DropColumn =
     'KW_DROP' 'KW_COLUMN'? ColumnName
 
 AnalyzeStmt = 
-    'KW_ANALYZE' schema: SchemaName? ('.' table: TableName)?
+    'KW_ANALYZE' analyze_target: (SchemaOrIdxOrTableName | TableOrIdxNameWithSchema)?
+
+TableOrIdxNameWithSchema =
+    SchemaName '.' TableOrIndexName
 
 // expr must resolve to string
 AttachDbStmt = 
     'KW_ATTACH' 'KW_DATABASE'? FileNameExpr 'KW_AS' SchemaNameExpr ('KW_KEY' PasswordExpr)?
 
 BeginStmt = 
-    'KW_BEGIN' kind: ('KW_DEFERRED' | 'KW_IMMEDIATE' | 'KW_EXCLUSIVE') 'KW_TRANSACTION'?
+    'KW_BEGIN' kind: ('KW_DEFERRED' | 'KW_IMMEDIATE' | 'KW_EXCLUSIVE')? 'KW_TRANSACTION'?
 
 CommitStmt = 
     ('KW_COMMIT' | 'KW_END') 'KW_TRANSACTION'?
 
 CreateIndexStmt = 
-    'KW_CREATE' unique: 'KW_UNIQUE'? 'KW_INDEX' IfNotExists? (SchemaName '.')? IndexNameDef 
+    'KW_CREATE' unique: 'KW_UNIQUE'? 'KW_INDEX' IfNotExists? FullIndexName
     'KW_ON' TableName IndexedColList WhereClause?
 
-FullIdxName = 
+FullIndexName = 
     (SchemaName '.')? IndexName
 
 WhereClause = 
     'KW_WHERE' Expr
 
 PragmaStmt =
-    'KW_PRAGMA' FullPragmaName? (('=' PragmaValue) | ('(' PragmaValue ')'))
+    'KW_PRAGMA' FullPragmaName (('=' PragmaValue) | ('(' PragmaValue ')'))?
 
 FullPragmaName = 
     (SchemaName '.')? pragma: PragmaName
@@ -68,10 +70,11 @@ PragmaValue =
     SignedNumber | PragmaValueName | 'STR_LIT'
 
 ReIndexStmt =
-    'KW_REINDEX' target: ('$COLLATION_NAME' | TableOrIdxNameWithSchema)?
+    'KW_REINDEX' target: (TableOrIdxOrCollationName | TableOrIdxNameWithSchema)?
 
-TableOrIdxNameWithSchema = 
-    (SchemaName '.')? table_or_index: TableOrIndexName
+// collation name is a superset of name so we can just say $COLLATION_NAME below
+TableOrIdxOrCollationName =
+    '$COLLATION_NAME'
 
 ReleaseStmt =
     'KW_RELEASE' 'KW_SAVEPOINT'? SavepointName
@@ -86,8 +89,8 @@ SavepointStmt =
     'KW_SAVEPOINT' SavepointName
 
 CreateTriggerStmt = 
-    'KW_CREATE' Temporary? 'KW_TRIGGER' IfNotExists?
-    (SchemaName '.')? TriggerNameDef trigger_when: ('KW_BEFORE' | 'KW_AFTER' | TriggerInsteadOf)
+    'KW_CREATE' temporary: ('KW_TEMP' | 'KW_TEMPORARY')? 'KW_TRIGGER' IfNotExists?
+    FullTriggerName trigger_when: ('KW_BEFORE' | 'KW_AFTER' | TriggerInsteadOf)
     TriggerActionKind  'KW_ON' TableName TriggerForEachRow? TriggerWhenExpr?
     'KW_BEGIN' TriggerBodyStmtList 'KW_END'
 
@@ -107,10 +110,10 @@ TriggerUpdateAffectCols =
     'KW_OF' ColumnName columns: (',' ColumnName)*
 
 TriggerForEachRow = 
-    'KW_FOR' | 'KW_EACH' | 'KW_ROW'
+    'KW_FOR' 'KW_EACH' 'KW_ROW'
 
 TriggerWhenExpr = 
-    'KW_WHEN' | Expr
+    'KW_WHEN' Expr
 
 TriggerBodyStmtList = 
     TriggerBodyStmt items: (';' TriggerBodyStmt)* ';'
@@ -119,11 +122,11 @@ TriggerBodyStmt =
     UpdateStmt | InsertStmt | DeleteStmt | SelectStmt
 
 CreateViewStmt = 
-    'KW_CREATE' Temporary? 'KW_VIEW' IfNotExists? (SchemaName '.')? ViewNameDef ColNameList? 
-    'KW_AS' SelectStmtWithCte
+    'KW_CREATE' temporary: ('KW_TEMP' | 'KW_TEMPORARY')? 'KW_VIEW' IfNotExists? 
+    FullViewName ColNameList? 'KW_AS' SelectStmtWithCte
 
 CreateVirtualTableStmt = 
-    'KW_CREATE' 'KW_VIRTUAL' 'KW_TABLE' IfNotExists? (SchemaName '.')? TableNameDef 'KW_USING' 
+    'KW_CREATE' 'KW_VIRTUAL' 'KW_TABLE' IfNotExists? FullTableName 'KW_USING' 
     ModuleName ModuleArgList?
 
 ModuleArgList = 
@@ -134,14 +137,14 @@ ModuleArg =
     'STR_LIT' | '$NUMERIC_LIT'
 
 DeleteStmt = 
-    CteClause? 'KW_DELETE' 'KW_FROM' QualifiedTableName WhereClause? ReturningClause?
+    'KW_DELETE' 'KW_FROM' QualifiedTableName WhereClause? ReturningClause?
     DeleteStmtLimited?
 
 DetachStmt =
     'KW_DETACH' 'KW_DATABASE'? DbNameExpr
 
 DropIndexStmt =
-    'KW_DROP' 'KW_INDEX' ('KW_IF' 'KW_EXISTS')? FullIdxName
+    'KW_DROP' 'KW_INDEX' ('KW_IF' 'KW_EXISTS')? FullIndexName
 
 DropTableStmt =
     'KW_DROP' 'KW_TABLE' ('KW_IF' 'KW_EXISTS')? FullTableName
@@ -153,7 +156,7 @@ DropViewStmt =
     'KW_DROP' 'KW_VIEW' ('KW_IF' 'KW_EXISTS')? FullViewName
 
 UpdateStmt = 
-    CteClause? 'KW_UPDATE' ('KW_OR' ConflictAction)? QualifiedTableName 
+    'KW_UPDATE' ('KW_OR' ConflictAction)? QualifiedTableName 
     'KW_SET' SetColumnExpr set_expressions: (',' SetColumnExpr) 
     FromClause? WhereClause? ReturningClause? UpdateStmtLimited?
 
@@ -162,7 +165,7 @@ UpdateStmtLimited =
     OrderByClause? LimitClause?
 
 InsertStmt = 
-    CteClause? InsertStmtKind 'KW_INTO' FullTableName WithAlias? ColNameList? InsertValueKind
+    InsertStmtKind 'KW_INTO' FullTableName WithAlias? ColNameList? InsertValueKind
     ReturningClause?
 
 InsertStmtKind = 
@@ -171,7 +174,7 @@ InsertStmtKind =
 InsertValueKind = InsertValuesClause | InsertSelectClause | InsertDefaultValuesClause
 
 InsertValuesClause = 
-    'KW_VALUES' ExprList expr_lists: (',' ExprList)* UpsertClause?
+    'KW_VALUES' ExprList expr_lists: (',' ExprList)* UpsertClause*
 
 InsertSelectClause =
     SelectStmtWithCte UpsertClause?
@@ -211,7 +214,7 @@ LimitClause =
     'KW_LIMIT' Expr Offset?
 
 Offset = 
-    'KW_OFFSET' (int_expr: Expr | (',' int_expr: Expr))
+    ('KW_OFFSET' int_expr: Expr) | (',' int_expr: Expr)
 
 ReturningClause = 
     'KW_RETURNING' ReturningClauseKind columns: (',' ReturningClauseKind)* 
@@ -246,21 +249,18 @@ TableNameNotIndexed =
 
 
 WithAlias = 
-    'KW_AS' AliasName
+    'KW_AS'? AliasName
 
 CreateTableStmt = 
-    'KW_CREATE' 
-    Temporary?
+    'KW_CREATE'
+    temporary: ('KW_TEMP' | 'KW_TEMPORARY')?
     'KW_TABLE' 
     IfNotExists?
-    (SchemaName '.') TableNameDef
+    FullTableName
     table_columns: (TableDetails | CreateTableSelect)
 
 IfNotExists = 
     'KW_IF' 'KW_NOT' 'KW_EXISTS'
-
-Temporary = 
-    'KW_TEMP' | 'KW_TEMPORARY'
 
 TableDetails = 
     '(' ColumnDef columns: (',' ColumnDef)* table_constraints: (',' TableConstraint)* ')' TableOptionsList?
@@ -269,14 +269,14 @@ TableOptionsList =
     TableOptions items: (',' TableOptions)*
 
 TableOptions = 
-    TableOptWithoutRowId | 'STRICT'
+    TableOptWithoutRowId | 'KW_STRICT'
 
 TableOptWithoutRowId = 
-    'KW_WITHOUT' 'ROWID'
+    'KW_WITHOUT' 'KW_ROWID'
 
 TableConstraint =
     ('KW_CONSTRAINT' ConstraintName)? 
-    (TablePkConstraint | TableUqConstraint | TableCheckConstraint | TableFkConstraint)
+    (TablePkConstraint | TableUqConstraint | CheckConstraint | TableFkConstraint)
 
 TablePkConstraint = 
     'KW_PRIMARY' 'KW_KEY' IndexedColList ConflictClause?
@@ -284,17 +284,14 @@ TablePkConstraint =
 TableUqConstraint = 
     'KW_UNIQUE' IndexedColList ConflictClause?
 
-TableCheckConstraint = 
-    'KW_CHECK' '(' Expr ')'
-
 TableFkConstraint = 
     'KW_FOREIGN' 'KW_KEY' ColNameList FkClause
 
 ColNameList = 
     '(' ColumnName items: (',' ColumnName)* ')'
 
-FkClause = '
-    KW_REFERENCES' TableName ColNameList? fk_actions: FkAction* FkDeferrable?
+FkClause = 
+    'KW_REFERENCES' TableName ColNameList? fk_actions: FkAction* FkDeferrable?
 
 FkAction = 
     action: (FkOnAction | FkMatchAction)
@@ -308,13 +305,7 @@ FkOnAction =
     action_result: (FkSetNull | FkSetDefault | FkCascade | FkRestrict | FkNoAction)
 
 FkDeferrable =
-    not: 'KW_NOT'? 'KW_DEFERRABLE' defer_kind: (FkInitiallyDeferred | FkInitiallyImmediate)?
-
-FkInitiallyDeferred = '
-    KW_INITIALLY' 'KW_DEFERRED'
-
-FkInitiallyImmediate = 
-    'KW_INITIALLY' 'KW_IMMEDIATE'
+    not: 'KW_NOT'? 'KW_DEFERRABLE' ('KW_INITIALLY' defer_kind: ('KW_DEFERRED' | 'KW_IMMEDIATE'))?
 
 FkSetNull = 
     'KW_SET' 'KW_NULL'
@@ -363,22 +354,25 @@ ValuesSelect =
     'KW_VALUES' ExprList
 
 SelectStmt =
-    SelectCore CompundSelect* OrderByClause? LimitClause?
+    SelectCore CompoundSelect* OrderByClause? LimitClause?
 
 SelectStmtWithCte =
     CteClause? SelectStmt
 
-CompundSelect =
+CompoundSelect =
     CompoundOperator SelectCore
 
 CompoundOperator =
-    'KW_UNION' | union_all: ('KW_UNION' 'KW_ALL') | 'KW_INTERSECT' | 'KW_EXCEPT'
+    UnionCompoundOperator | 'KW_INTERSECT' | 'KW_EXCEPT'
+
+UnionCompoundOperator =
+    'KW_UNION' all: ('KW_ALL')?
 
 ResultColumnList = 
     ResultColumn items: (',' ResultColumn)*
 
 FromClause = 
-    'KW_FROM' item: (TableOrSubqueryList | JoinClause)
+    'KW_FROM' item: (TableOrSubquery | JoinClause)
 
 GroupByClause =
     'KW_GROUP' 'KW_BY' Expr items: (',' Expr)*
@@ -407,13 +401,12 @@ FrameSpec =
     FrameSpecExcludeClause?
 
 FrameSpecExcludeClause =
-    'KW_EXCLUDE' kind: (FrameSpecExcludeNoOthers |  FrameSpecExcludeCurrentRow | 'KW_GROUP' | 'KW_TIES')
+    'KW_EXCLUDE' 
+    frame_spec_exclude_kind: (FrameSpecNoOthers |  FrameSpecCurrentRow | 'KW_GROUP' | 'KW_TIES')
 
-FrameSpecExcludeNoOthers =
+FrameSpecNoOthers =
     'KW_NO' 'KW_OTHERS'
 
-FrameSpecExcludeCurrentRow =
-    'KW_CURRENT' 'KW_ROW'
 
 FrameSpecBetweenClause = 
     'KW_BETWEEN' FrameSpecBetweenLeft 'KW_AND' FrameSpecBetweenRight
@@ -440,7 +433,7 @@ FrameSpecFollowing =
     Expr 'KW_FOLLOWING'
 
 TableOrSubquery =
-    QualifiedTableName | FromClauseTableValueFunction | FromClauseSelectStmt | NestedTableOrSubquery
+    QualifiedTableName | FromClauseTableValueFunction | ('(' SelectStmtWithCte ')' WithAlias?) | ('(' (JoinClause | TableOrSubquery) ')')
 
 FromClauseTableValueFunction =
     FullTableFunctionName ExprList WithAlias?
@@ -448,16 +441,22 @@ FromClauseTableValueFunction =
 FromClauseSelectStmt = 
     '(' SelectStmtWithCte ')' WithAlias?
 
-NestedTableOrSubquery =
-    '(' TableOrSubqueryList | JoinClause ')'
+// NestedTableOrSubquery =
+//     '(' (TableOrSubqueryList | JoinClause) ')'
 
-TableOrSubqueryList = TableOrSubquery items: (',' TableOrSubquery)*
+// TableOrSubqueryList = TableOrSubquery items: (',' TableOrSubquery)*
+
+// JoinClause =
+//     left: TableOrSubquery JoinClauseRightSide*
+
+// JoinClauseRightSide =
+//     JoinOperator right: TableOrSubquery JoinConstraint?
 
 JoinClause =
-    left: TableOrSubquery JoinClauseRightSide*
+    (left: (TableOrSubquery | JoinClause) JoinOperator right: (TableOrSubquery | JoinClause) JoinConstraint?) 
 
-JoinClauseRightSide =
-    (JoinOperator right: TableOrSubquery JoinConstraint?)
+// JoinClauseRightSide =
+//     JoinOperator right: TableOrSubquery JoinConstraint?
 
 JoinConstraint = 
     ('KW_ON' on_expr: Expr) | ('KW_USING' ColNameList)
@@ -469,40 +468,44 @@ CommaJoin =
     ','
 
 NonCommaJoin = 
-    (CrossJoin | OuterJoin | InnerJoin | NaturalJoin) 'KW_JOIN'
+    (CrossJoin | OuterJoin | InnerJoin | NaturalJoin | Join)
+
+Join =
+    'KW_JOIN'
 
 CrossJoin =
-    'KW_CROSS'
+    'KW_CROSS' 'KW_JOIN'
 
 OuterJoin  =
-    outer_join_kind: ('KW_LEFT' | 'KW_RIGHT' | 'KW_FULL') 'KW_OUTER'?
+    outer_join_kind: ('KW_LEFT' | 'KW_RIGHT' | 'KW_FULL') 'KW_OUTER'? 'KW_JOIN'
 
 InnerJoin = 
-    natural: 'KW_INNER'
+    natural: 'KW_INNER' 'KW_JOIN'
 
 NaturalJoin =
-    'KW_NATURAL' natural_join_kind: (InnerJoin | OuterJoin)
+    'KW_NATURAL' natural_join_kind: (InnerJoin | OuterJoin | Join)
 
 ResultColumn = 
     ResultColumnExpr | ResultColumnAll | ResultColumnTableAll
 
 ResultColumnExpr = 
-    Expr 'KW_AS'? AliasName?
+    Expr WithAlias?
 
 ResultColumnAll = 
-    '*'
+    '*' 
 
 ResultColumnTableAll = 
     TableName '.' '*'
 
 ColumnDef = 
-    ColumnNameDef TypeName? constraints: ColumnConstraint*
+    ColumnName TypeName? constraints: ColumnConstraint*
 
 ColumnConstraint = 
     ColumnConstraintName? 
     constraint_type: (PrimaryConstraint | NotNullConstraint | UniqueConstraint | CheckConstraint | DefaultConstraint | Collation | ColumnGenerated)
 
-ColumnConstraintName = 'KW_CONSTRAINT' ConstraintName
+ColumnConstraintName = 
+    'KW_CONSTRAINT' ConstraintName
 
 PrimaryConstraint = 
     'KW_PRIMARY' 'KW_KEY' 
@@ -513,27 +516,36 @@ PrimaryConstraint =
 ConflictClause = 
     'KW_ON' 'KW_CONFLICT' ConflictAction
 
-ConflictAction = 'KW_ROLLBACK' | 'KW_ABORT' | 'KW_FAIL' | 'KW_IGNORE' | 'KW_REPLACE'
+ConflictAction = 
+    'KW_ROLLBACK' | 'KW_ABORT' | 'KW_FAIL' | 'KW_IGNORE' | 'KW_REPLACE'
 
-NotNullConstraint = 'KW_NOT' 'KW_NULL' ConflictClause?
+NotNullConstraint = 
+    'KW_NOT' 'KW_NULL' ConflictClause?
 
-UniqueConstraint = 'KW_UNIQUE' ConflictClause?
+UniqueConstraint = 
+    'KW_UNIQUE' ConflictClause?
 
-CheckConstraint = 'KW_CHECK' '(' Expr ')'
+CheckConstraint = 
+    'KW_CHECK' '(' Expr ')'
 
-DefaultConstraint = 'KW_DEFAULT' value: (DefaultConstraintExpr | DefaultConstraintLiteral | SignedNumber)
+DefaultConstraint = 
+    'KW_DEFAULT' value: (DefaultConstraintExpr | DefaultConstraintLiteral | SignedNumber)
 
-DefaultConstraintExpr = '(' Expr ')'
+DefaultConstraintExpr = 
+    '(' Expr ')'
 
-DefaultConstraintLiteral = value: '$LITERAL_VALUE'
+DefaultConstraintLiteral = 
+    value: '$LITERAL_VALUE'
 
-ColumnGenerated = ('KW_GENERATED' 'KW_ALWAYS')? 'KW_AS' '(' Expr ')' ColumnGeneratedKind
+ColumnGenerated = 
+    ('KW_GENERATED' 'KW_ALWAYS')? 'KW_AS' '(' Expr ')' ColumnGeneratedKind?
 
-ColumnGeneratedKind = 'stored' | 'KW_VIRTUAL'
+ColumnGeneratedKind = 
+    'KW_STORED' | 'KW_VIRTUAL'
 
 Expr = 
     ExprParen | ExprLit | ExprColumnName | ExprPrefix | ExprPostfix | ExprInfix | ExprBindParam
-    | ExprFunc | ExprExistsSelect | ExprList | ExprCast | ExprCase | RaiseFunc
+    | ExprFunc | ExprSelect | ExprList | ExprCast | ExprCase | RaiseFunc
 
 ExprCast = 
     'KW_CAST' '(' Expr 'KW_AS' TypeName ')'
@@ -541,9 +553,6 @@ ExprCast =
 ExprLit = 
     'INT_LIT' | 'HEX_LIT' | 'STR_LIT' | 'REAL_LIT' | 'BLOB_LIT' | 'KW_NULL' 
     | 'KW_TRUE' | 'KW_FALSE' | 'KW_CURRENT_TIME' | 'KW_CURRENT_DATE' | 'KW_CURRENT_TIMESTAMP'
-
-InExprList = 
-    '(' Expr items: (',' Expr)* ')'
 
 InSelect =
      '(' SelectStmtWithCte ')'
@@ -557,8 +566,8 @@ InTableFunc =
 ExprBindParam = 
     '?'
 
-ExprExistsSelect =
-    not: 'KW_NOT'? 'KW_EXISTS' '(' SelectStmtWithCte ')'
+ExprSelect =
+    not: 'KW_NOT'? 'KW_EXISTS'? '(' SelectStmtWithCte ')'
 
 ExprCase = 
     'KW_CASE' CaseTargetExpr? CaseWhenClauseList CaseElseClause? 'KW_END'
@@ -667,10 +676,10 @@ OpNotLike =
     'KW_NOT' 'KW_LIKE' Expr ('KW_ESCAPE' escape: 'STR_LIT')?
 
 OpNotBetweenAnd = 
-    'KW_NOT' 'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
+    Expr 'KW_NOT' 'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
 
 OpBetweenAnd = 
-    'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
+    Expr 'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
 
 OpConcat =
     lhs: Expr '||' rhs: Expr
@@ -745,10 +754,10 @@ OpIs =
     lhs: Expr 'KW_IS' rhs: Expr
 
 OpIn =
-    'KW_IN' '(' in_expr_kind: (InExprList | InSelect | InTableFunc | InTable)
+    'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
 
 OpNotIn =
-    not: 'KW_NOT' 'KW_IN' '(' in_expr_kind: (InExprList | InSelect | InTableFunc | InTable)
+    not: 'KW_NOT' 'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
 
 OpIsDistinctFrom = 
     lhs: Expr  'KW_IS' 'KW_DISTINCT' 'KW_FROM' rhs: Expr
@@ -828,21 +837,6 @@ WindowBaseName =
 AnyValidName = 
     value: '$NAME'
 
-ColumnNameDef = 
-    value: '$NAME'
-
-TableNameDef = 
-    value: '$NAME'
-
-IndexNameDef = 
-    value: '$NAME'
-
-ViewNameDef = 
-    value: '$NAME'
-
-TriggerNameDef = 
-    value: '$NAME'
-
 FunctionName = 
     value: '$NAME'
 
@@ -863,3 +857,6 @@ DbNameExpr =
 
 CollationName =
     '$COLLATION_NAME'
+
+SchemaOrIdxOrTableName = 
+    '$NAME'
