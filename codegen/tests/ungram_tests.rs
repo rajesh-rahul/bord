@@ -1,18 +1,9 @@
+use bord_sqlite3_parser::{sqlite_keywords, ungram::UNGRAMMAR};
 use quote::{format_ident, quote};
-use std::sync::LazyLock;
-use bord_sqlite3_parser::sqlite_keywords;
-
-static UNGRAMMAR: LazyLock<ungrammar::Grammar> = LazyLock::new(|| {
-    let input = include_str!("../../sqlite.ungram");
-
-    input.parse::<ungrammar::Grammar>().unwrap()
-});
 
 #[test]
 fn test_ungram_keywords_are_correct() {
-    for token in UNGRAMMAR.tokens() {
-        let token_data = &UNGRAMMAR[token];
-
+    for token_data in UNGRAMMAR.tokens() {
         if token_data.name.starts_with("KW_") {
             let keyword = token_data.name.trim_start_matches("KW_");
             if sqlite_keywords().get(keyword.as_bytes()).is_none() {
@@ -35,8 +26,8 @@ fn test_tree_kinds_are_correct() {
     let input = include_str!("../../sqlite3-parser/src/tree_kind.rs");
 
     let enum_variants = UNGRAMMAR
-        .iter()
-        .map(|node| format_ident!("{}", &UNGRAMMAR[node].name));
+        .nodes()
+        .map(|node| format_ident!("{}", &node.name));
 
     let actual = syn::parse_file(input).unwrap();
 
