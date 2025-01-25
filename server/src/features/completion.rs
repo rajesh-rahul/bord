@@ -1,40 +1,37 @@
+use bord_sqlite3_parser::ungram::{
+    rule_to_str, Rule, UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind,
+    UNGRAMMAR,
+};
+use bord_sqlite3_parser::{CstNode, CstNodeData, SqliteTokenKind, SqliteUntypedCst};
 use hashbrown::HashSet;
 use itertools::Itertools;
 use line_index::TextSize;
-use bord_sqlite3_parser::ungram::{
-    UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind, UNGRAMMAR, Rule
-};
-use bord_sqlite3_parser::{SqliteNode, SqliteTokenKind, SqliteUntypedAst};
 
-pub(crate) fn create_completion_context(ast: &SqliteUntypedAst, cursor: TextSize) -> Vec<String> {
+pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize) -> Vec<String> {
     //// Find the token to the left of autocomplete position. We ignore trivial tokens (like whitespace tokens)
     let mut nodes_iter = ast.nodes().rev();
 
-    let Some((mut target_id, mut target)) = nodes_iter.find(|(_, it)| {
-        it.token_child()
-            .is_some_and(|it| TextSize::new(it.token.end()) <= cursor)
+    let Some(mut target) = nodes_iter.find(|it| {
+        it.token()
+            .is_some_and(|it| TextSize::new(it.end()) <= cursor)
     }) else {
         return Vec::new();
     };
 
     // If the token immediately to the left of the cursor is a trivial token, it is important
     // for us to know this but we keep going to find a target that is not trivial
-    let ends_in_whitespace =
-        target.token_child().unwrap().token.kind == SqliteTokenKind::WHITESPACE;
+    let ends_in_whitespace = target.token_kind() == Some(SqliteTokenKind::WHITESPACE);
 
     if ends_in_whitespace {
-        let Some((t_id, t)) =
-            nodes_iter.find(|(_, it)| it.token_child().is_some_and(|it| !it.token.is_trivia()))
-        else {
+        let Some(t) = nodes_iter.find(|it| it.token().is_some_and(|it| !it.is_trivia())) else {
             return Vec::new();
         };
 
-        target_id = t_id;
         target = t;
     }
     ////
 
-    let path_to_target = calculate_path_to_target(target, ast);
+    let path_to_target = calculate_path_to_target(&target);
     tracing::info!(?path_to_target);
 
     let prefix_removed = |completions: &[String], prefix: &str| {
@@ -66,10 +63,9 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedAst, cursor: TextSize
         _ => {}
     }
 
-
     // If we didn't hit any special cases, we are ready to walk the grammar tree
-    let mut traverser = UngramTraverser::new(ast.root(), &ast, UNGRAMMAR.root());
-    let ancestors_ids: HashSet<_> = target.ancestors(ast).map(|(id, _)| id).collect();
+    let mut traverser = UngramTraverser::new(ast.root(), UNGRAMMAR.root());
+    let ancestors_ids: HashSet<_> = target.ancestors().map(|it| it.id).collect();
 
     let mut target_rule = None;
 
@@ -79,55 +75,57 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedAst, cursor: TextSize
                 name,
                 ast_node,
                 rule,
-            } => {
-                match ast_node {
-                    Some(node @ SqliteNode::Token(_))
-                        if node.as_str() == name.trim_start_matches("KW_")
-                            || node.as_str() == "IDEN" =>
-                    {
-                        if node.idx() == target_id {
-                            target_rule = Some(rule);
-                            break;
-                        }
-                        traverser.token_visited();
+            } => match ast_node {
+                Some(
+                    node @ CstNode {
+                        data: CstNodeData::Token(_),
+                        ..
+                    },
+                ) if node.as_str() == name.trim_start_matches("KW_") || node.as_str() == "IDEN" => {
+                    if node.id == target.id {
+                        target_rule = Some(rule);
+                        break;
                     }
-                    _ => {
-                        if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
-                            tracing::error!("Ungrammar and AST mismatch encountered");
-                            return Vec::new()
-                        }
+                    traverser.token_visited();
+                }
+                _ => {
+                    if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
+                        tracing::error!("Ungrammar and AST mismatch encountered");
+                        return Vec::new();
                     }
                 }
-            }
+            },
             UngramTraverserNodeKind::Tree {
                 name,
                 rule,
                 ast_node,
-            } => {
-                match ast_node {
-                    Some(node @ SqliteNode::Tree(_)) if node.as_str() == name => {
-                        if node.idx() == target_id {
-                            target_rule = Some(rule);
-                            break;
-                        }
-
-                        if ancestors_ids.contains(&node.idx()) {
-                            traverser.node_visited_and_expand_children();
-                        } else {
-                            traverser.node_visited();
-                        }
+            } => match ast_node {
+                Some(
+                    node @ CstNode {
+                        data: CstNodeData::Tree(_),
+                        ..
+                    },
+                ) if node.as_str() == name => {
+                    if node.id == target.id {
+                        target_rule = Some(rule);
+                        break;
                     }
-                    _ => {
-                        if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
-                            tracing::error!("Ungrammar and AST mismatch encountered");
-                            return Vec::new()
-                        }
+
+                    if ancestors_ids.contains(&node.id) {
+                        traverser.node_visited_and_expand_children();
+                    } else {
+                        traverser.node_visited();
                     }
                 }
-            }
+                _ => {
+                    if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
+                        tracing::error!("Ungrammar and AST mismatch encountered");
+                        return Vec::new();
+                    }
+                }
+            },
         }
     }
-
 
     match target_rule {
         Some(node) if traverser.rules_history().len() >= 2 => {
@@ -135,7 +133,9 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedAst, cursor: TextSize
             let mut completions = CompletionNode::new_tree();
 
             loop {
-                if let Some(comp_target) = first_follow_rule(&before_comp_target, traverser.rules_history()) {
+                if let Some(comp_target) =
+                    first_follow_rule(&before_comp_target, traverser.rules_history())
+                {
                     tracing::info!("completion_target: {}", rule_to_str(comp_target));
 
                     let mut new_tree = CompletionNode::new_tree();
@@ -183,18 +183,6 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedAst, cursor: TextSize
     Vec::new()
 }
 
-fn rule_to_str(r: &Rule) -> String {
-    match r {
-        Rule::Labeled { label, rule } => format!("{label} : {}", rule_to_str(rule)),
-        Rule::Node(node) => format!("{}", UNGRAMMAR.get_node(*node).name),
-        Rule::Token(token) => format!("{}", UNGRAMMAR.get_token(*token)),
-        Rule::Seq(vec) => format!("[{}]", vec.iter().map(rule_to_str).join(", ")),
-        Rule::Alt(vec) => vec.iter().map(rule_to_str).join(" | "),
-        Rule::Opt(rule) => format!("({})?", rule_to_str(rule)),
-        Rule::Rep(rule) => format!("({})*", rule_to_str(rule)),
-    }
-}
-
 fn find_completions(rule: &Rule) -> Vec<String> {
     let mut comp_node = CompletionNode::new_tree();
     make_completions(rule, &mut HashSet::new(), &mut comp_node, 0);
@@ -202,7 +190,11 @@ fn find_completions(rule: &Rule) -> Vec<String> {
     let mut completions = Vec::new();
     resolve_tree(&comp_node, &mut Vec::new(), &mut completions);
 
-    completions.into_iter().unique().map(|it| it.join(" ")).collect()
+    completions
+        .into_iter()
+        .unique()
+        .map(|it| it.join(" "))
+        .collect()
 }
 
 // TODO: return the parent idx so that subsequent calls to first_follow_rule can use the correct
@@ -258,40 +250,25 @@ fn first_follow_rule<'a>(source: &'a Rule, parents: &[&'a Rule]) -> Option<&'a R
 }
 
 #[derive(Debug)]
-pub enum AstPath<'a> {
-    Me(&'a str),
-    Sibling(&'a str),
-    Ancestor(&'a str),
+pub enum AstPath {
+    Me(&'static str),
+    Sibling(&'static str),
+    Ancestor(&'static str),
 }
 
-fn calculate_path_to_target<'a>(target: &'a SqliteNode,  ast: &'a SqliteUntypedAst) -> Vec<AstPath<'a>> {
+fn calculate_path_to_target<'a>(target: &CstNode<'a>) -> Vec<AstPath> {
     use AstPath::*;
     // Add my ancestors
     let mut path_to_target: Vec<_> = target
-        .ancestors(ast)
-        .map(|(_, ancestor)| Ancestor(ancestor.as_str()))
+        .ancestors()
+        .map(|ancestor| Ancestor(ancestor.as_str()))
         .collect();
 
     path_to_target.reverse(); // We need File at the beginning and target at the end
 
-    // Add my older siblings (siblings nodes to the left of target node)
-    let parent = target.parent_as_node(ast).unwrap();
-
-    let parent_children = match parent {
-        SqliteNode::Tree(tree_child) => &tree_child.children,
-        SqliteNode::Error(error_child) => &error_child.children,
-        _ => unreachable!(),
-    }; // Unwrap is safe
-
-    // If we find ourselves, we can add us to the path and end loop
-    for child_id in parent_children {
-        if *child_id == target.idx() {
-            path_to_target.push(Me(target.as_str()));
-            break;
-        } else {
-            path_to_target.push(Sibling(child_id.as_node(ast).as_str()));
-        }
-    }
+    let older_siblings = target.left_siblings().map(|it| Sibling(it.as_str()));
+    path_to_target.extend(older_siblings);
+    path_to_target.push(Me(target.as_str()));
 
     path_to_target.reverse();
 
@@ -386,7 +363,14 @@ impl CompletionNode {
     }
 
     pub fn add_empty_child(&mut self) {
-        if self.kind != CompletionNodeKind::Root && self.is_leaf() && !self.children.iter().any(|it| it.kind == CompletionNodeKind::Empty) && !self.is_fused {
+        if self.kind != CompletionNodeKind::Root
+            && self.is_leaf()
+            && !self
+                .children
+                .iter()
+                .any(|it| it.kind == CompletionNodeKind::Empty)
+            && !self.is_fused
+        {
             self.children.push(CompletionNode {
                 kind: CompletionNodeKind::Empty,
                 children: Vec::new(),
@@ -398,7 +382,6 @@ impl CompletionNode {
         for child in &mut self.children {
             child.add_empty_child();
         }
-
     }
     pub fn combine_trees(&mut self, mut tree: CompletionNode) {
         assert!(tree.kind == CompletionNodeKind::Root);
@@ -428,15 +411,20 @@ impl CompletionNode {
     }
 
     pub fn is_new_path_addable(&self) -> bool {
-        self.allow_new_paths || self.is_leaf() && self.kind == CompletionNodeKind::Root 
+        self.allow_new_paths || self.is_leaf() && self.kind == CompletionNodeKind::Root
     }
 
     pub fn is_leaf(&self) -> bool {
-        self.children.is_empty() || self.children.len() == 1 && self.children[0].kind == CompletionNodeKind::Empty
+        self.children.is_empty()
+            || self.children.len() == 1 && self.children[0].kind == CompletionNodeKind::Empty
     }
 }
 
-fn resolve_tree(node: &CompletionNode, current_path: &mut Vec<String>, all_paths: &mut Vec<Vec<String>>) {
+fn resolve_tree(
+    node: &CompletionNode,
+    current_path: &mut Vec<String>,
+    all_paths: &mut Vec<Vec<String>>,
+) {
     match &node.kind {
         CompletionNodeKind::Root => {
             if node.children.is_empty() && !current_path.is_empty() {
@@ -487,12 +475,14 @@ fn make_completions(
 
                 if ["Expr", "TableOrSubquery", "JoinClause"].contains(&node_data.name.as_str()) {
                     completions.fuse_nodes();
-                }
-
-                else if completions.can_add_new_path() {
+                } else if completions.can_add_new_path() {
                     let mut new_completions = CompletionNode::new_tree();
-                    result =
-                        make_completions(&node_data.rule, seen_nodes, &mut new_completions, level + 1);
+                    result = make_completions(
+                        &node_data.rule,
+                        seen_nodes,
+                        &mut new_completions,
+                        level + 1,
+                    );
                     if !result {
                         new_completions.fuse_nodes();
                     }
@@ -516,33 +506,35 @@ fn make_completions(
                 result = true;
             }
         }
-        Rule::Labeled { rule, .. } => result = make_completions(rule, seen_nodes, completions, level + 1),
+        Rule::Labeled { rule, .. } => {
+            result = make_completions(rule, seen_nodes, completions, level + 1)
+        }
         Rule::Seq(vec) => {
             result = true;
             for rule in vec {
                 if !make_completions(rule, seen_nodes, completions, level + 1) {
                     completions.fuse_nodes();
                     result = false;
-                    break
+                    break;
                 }
             }
         }
         Rule::Alt(vec) => {
-                let mut comp_tree = CompletionNode::new_tree();
+            let mut comp_tree = CompletionNode::new_tree();
 
-                let mut overall_result = true;
-    
-                for rule in vec {
-                    let mut new_comp_tree = CompletionNode::new_tree();
-                    let new_result = make_completions(rule, seen_nodes, &mut new_comp_tree, level + 1);
-                    overall_result = overall_result && new_result;
-    
-                    if !new_result {
-                        new_comp_tree.fuse_nodes();
-                    }
-                    comp_tree.combine_trees(new_comp_tree);
+            let mut overall_result = true;
+
+            for rule in vec {
+                let mut new_comp_tree = CompletionNode::new_tree();
+                let new_result = make_completions(rule, seen_nodes, &mut new_comp_tree, level + 1);
+                overall_result = overall_result && new_result;
+
+                if !new_result {
+                    new_comp_tree.fuse_nodes();
                 }
-                completions.append_tree_to_all_paths(comp_tree);
+                comp_tree.combine_trees(new_comp_tree);
+            }
+            completions.append_tree_to_all_paths(comp_tree);
 
             result = true;
         }
@@ -618,31 +610,52 @@ mod completions_tests {
                 let completions = autocomplete_sql($sql);
 
                 let completions_set = completions.into_iter().sorted().collect_vec();
-                let expected = $expected.iter().map(|it| it.to_string()).sorted().collect_vec();
-        
+                let expected = $expected
+                    .iter()
+                    .map(|it| it.to_string())
+                    .sorted()
+                    .collect_vec();
+
                 assert_eq!(completions_set, expected);
             }
-        }
+        };
     }
 
-    testcase!(
-        test_autocomplete1, 
-        "SELECT",
-        &["DISTINCT", "ALL"]
-    );
+    testcase!(test_autocomplete1, "SELECT", &["DISTINCT", "ALL"]);
 
     testcase!(
-        test_autocomplete2, 
+        test_autocomplete2,
         "SELECT *",
-        &["LIMIT", "HAVING", "INTERSECT", "EXCEPT", "FROM", "WINDOW", "UNION", "GROUP BY", "ORDER BY", "WHERE"]
+        &[
+            "LIMIT",
+            "HAVING",
+            "INTERSECT",
+            "EXCEPT",
+            "FROM",
+            "WINDOW",
+            "UNION",
+            "GROUP BY",
+            "ORDER BY",
+            "WHERE"
+        ]
     );
 
     testcase!(
-        test_autocomplete3, 
+        test_autocomplete3,
         "SELECT * FROM users ` GROUP BY name",
         &[
-            "AS", "LIMIT", "HAVING", "INTERSECT", "EXCEPT", "WINDOW", "INDEXED BY", 
-            "NOT INDEXED", "UNION", "GROUP BY", "ORDER BY", "WHERE"
+            "AS",
+            "LIMIT",
+            "HAVING",
+            "INTERSECT",
+            "EXCEPT",
+            "WINDOW",
+            "INDEXED BY",
+            "NOT INDEXED",
+            "UNION",
+            "GROUP BY",
+            "ORDER BY",
+            "WHERE"
         ]
     );
 
@@ -656,43 +669,66 @@ mod completions_tests {
     );
 
     testcase!(
-        test_autocomplete5, 
+        test_autocomplete5,
         "EXPLAIN",
         &[
-            "ALTER TABLE", "ANALYZE", "ATTACH", "BEGIN", "COMMIT", "CREATE INDEX", 
-            "CREATE TABLE", "CREATE TRIGGER", "CREATE", "CREATE VIEW", "CREATE VIRTUAL TABLE", 
-            "DELETE FROM", "DETACH", "DROP INDEX", "DROP TABLE", "DROP TRIGGER", "DROP VIEW", 
-            "END", "INSERT", "INSERT INTO", "PRAGMA", "QUERY PLAN", "REINDEX", "RELEASE", "REPLACE INTO", 
-            "ROLLBACK", "SAVEPOINT", "SELECT", "UPDATE", "VACUUM", "VALUES", "WITH"
+            "ALTER TABLE",
+            "ANALYZE",
+            "ATTACH",
+            "BEGIN",
+            "COMMIT",
+            "CREATE INDEX",
+            "CREATE TABLE",
+            "CREATE TRIGGER",
+            "CREATE",
+            "CREATE VIEW",
+            "CREATE VIRTUAL TABLE",
+            "DELETE FROM",
+            "DETACH",
+            "DROP INDEX",
+            "DROP TABLE",
+            "DROP TRIGGER",
+            "DROP VIEW",
+            "END",
+            "INSERT",
+            "INSERT INTO",
+            "PRAGMA",
+            "QUERY PLAN",
+            "REINDEX",
+            "RELEASE",
+            "REPLACE INTO",
+            "ROLLBACK",
+            "SAVEPOINT",
+            "SELECT",
+            "UPDATE",
+            "VACUUM",
+            "VALUES",
+            "WITH"
         ]
     );
 
-    testcase!(
-        test_autocomplete6, 
-        "EXPLAIN ATTACH",
-        &["DATABASE"]
-    );
+    testcase!(test_autocomplete6, "EXPLAIN ATTACH", &["DATABASE"]);
 
     testcase!(
-        test_autocomplete7, 
+        test_autocomplete7,
         "ALTER TABLE users ",
         &["ADD", "DROP", "RENAME", "RENAME TO"]
     );
 
     testcase!(
-        test_autocomplete8, 
+        test_autocomplete8,
         "INSERT OR IGNORE INTO users VALUES (1, 2)",
         &["ON CONFLICT", "RETURNING"]
     );
 
     testcase!(
-        test_autocomplete9, 
+        test_autocomplete9,
         "INSERT OR IGNORE INTO users VALUES (1, 2) ON CONFLICT",
         &["DO NOTHING", "DO UPDATE SET"]
     );
 
     testcase!(
-        test_autocomplete10, 
+        test_autocomplete10,
         "INSERT OR IGNORE INTO users VALUES (1, 2) ON CONFLICT DO",
         &["NOTHING", "UPDATE SET"]
     );

@@ -1,7 +1,7 @@
-use line_index::LineIndex;
-use bord_sqlite3_parser::{SqliteUntypedAst, parse, SqliteParseError};
-use tower_lsp::lsp_types as lsp;
 use crate::from_lsp;
+use bord_sqlite3_parser::{parse, SqliteParseError, SqliteUntypedCst};
+use line_index::LineIndex;
+use tower_lsp::lsp_types as lsp;
 
 #[derive(Debug)]
 pub struct TextDocument {
@@ -15,21 +15,21 @@ pub struct TextDocument {
     /// Textual data of the text document
     pub(crate) contents: String,
     // TODO: Add lsp's language id info
-    pub(crate) ast: SqliteUntypedAst,
+    pub(crate) cst: SqliteUntypedCst,
 
-    pub(crate) diagnostics: Vec<lsp::Diagnostic>
+    pub(crate) diagnostics: Vec<lsp::Diagnostic>,
 }
 
 impl TextDocument {
     pub fn new(doc_version: i32, contents: String) -> Self {
-        let ast = parse(&contents);
+        let cst = parse(&contents);
 
         TextDocument {
             line_index: LineIndex::new(&contents),
             doc_version,
             contents,
-            ast,
-            diagnostics: Vec::new()
+            cst,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -58,14 +58,14 @@ impl TextDocument {
         anyhow::ensure!(self.doc_version < doc_version, "Unexpected doc version");
 
         self.doc_version = doc_version;
-        self.ast = parse(&self.contents);
+        self.cst = parse(&self.contents);
         self.update_diagnostics();
 
         Ok(())
     }
 
     pub fn errors(&self) -> &[SqliteParseError] {
-        &self.ast.errors
+        self.cst.errors()
     }
 
     pub fn line_index(&self) -> &LineIndex {
@@ -73,26 +73,30 @@ impl TextDocument {
     }
 
     fn update_diagnostics(&mut self) {
-        self.diagnostics = self.errors().iter()                .map(|err| {
-            let start_pos = self.line_index.try_line_col(err.range.0.into()).unwrap();
-            let end_pos = self.line_index.try_line_col((err.range.1).into()).unwrap();
+        self.diagnostics = self
+            .errors()
+            .iter()
+            .map(|err| {
+                let start_pos = self.line_index.try_line_col(err.range.0.into()).unwrap();
+                let end_pos = self.line_index.try_line_col((err.range.1).into()).unwrap();
 
-            let start = lsp::Position {
-                line: start_pos.line,
-                character: start_pos.col,
-            };
-            let end = lsp::Position {
-                line: end_pos.line,
-                character: end_pos.col + 1,
-            };
-            lsp::Diagnostic {
-                range: lsp::Range { start, end },
-                severity: Some(lsp::DiagnosticSeverity::ERROR),
-                message: err.to_string(),
-                source: Some("bordsql".into()),
-                ..Default::default()
-            }
-        }).collect();
+                let start = lsp::Position {
+                    line: start_pos.line,
+                    character: start_pos.col,
+                };
+                let end = lsp::Position {
+                    line: end_pos.line,
+                    character: end_pos.col + 1,
+                };
+                lsp::Diagnostic {
+                    range: lsp::Range { start, end },
+                    severity: Some(lsp::DiagnosticSeverity::ERROR),
+                    message: err.to_string(),
+                    source: Some("bordsql".into()),
+                    ..Default::default()
+                }
+            })
+            .collect();
     }
 
     pub(crate) fn diagnostics(&self) -> &[lsp::Diagnostic] {

@@ -1,7 +1,6 @@
+use crate::text_document::TextDocument;
 use dashmap::DashMap;
 use tower_lsp::lsp_types as lsp;
-use crate::text_document::TextDocument;
-
 
 #[derive(Default, Debug)]
 pub struct Vfs {
@@ -10,10 +9,7 @@ pub struct Vfs {
 }
 
 impl Vfs {
-    pub fn add_new_text_document(
-        &self,
-        data: lsp::DidOpenTextDocumentParams,
-    ) {
+    pub fn add_new_text_document(&self, data: lsp::DidOpenTextDocumentParams) {
         let doc_url = data.text_document.uri;
         let doc_version = data.text_document.version;
 
@@ -23,10 +19,7 @@ impl Vfs {
         }
     }
 
-    pub fn close_text_document(
-        &self,
-        data: lsp::DidCloseTextDocumentParams,
-    ) {
+    pub fn close_text_document(&self, data: lsp::DidCloseTextDocumentParams) {
         let doc_url = data.text_document.uri;
 
         if self.files.remove(&doc_url).is_some() {
