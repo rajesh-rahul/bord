@@ -1,6 +1,6 @@
 // TODO: Enforce - If a node contains multiple identical children and any one of them is optional, it is illegal
 
-File = (Statement ';')*
+File = statements: (Statement ';')*
 
 Statement = 
     ExplainClause? statement_kind: (StatementNoCte | StatementWithCte)
@@ -25,7 +25,7 @@ RenameTable =
     'KW_RENAME' 'KW_TO' TableName
 
 RenameColumn = 
-    'KW_RENAME' 'KW_COLUMN'? old_name: ColumnName 'KW_TO' new_name: ColumnName
+    'KW_RENAME' 'KW_COLUMN'? old_name: ColumnName 'KW_TO' new_name: NewColumnName
 
 AddColumn = 
     'KW_ADD' 'KW_COLUMN'? ColumnDef
@@ -44,10 +44,10 @@ AttachDbStmt =
     'KW_ATTACH' 'KW_DATABASE'? FileNameExpr 'KW_AS' SchemaNameExpr ('KW_KEY' PasswordExpr)?
 
 BeginStmt = 
-    'KW_BEGIN' kind: ('KW_DEFERRED' | 'KW_IMMEDIATE' | 'KW_EXCLUSIVE')? 'KW_TRANSACTION'?
+    'KW_BEGIN' begin_stmt_kind: ('KW_DEFERRED' | 'KW_IMMEDIATE' | 'KW_EXCLUSIVE')? 'KW_TRANSACTION'?
 
 CommitStmt = 
-    ('KW_COMMIT' | 'KW_END') 'KW_TRANSACTION'?
+    commit_start_kw: ('KW_COMMIT' | 'KW_END') 'KW_TRANSACTION'?
 
 CreateIndexStmt = 
     'KW_CREATE' unique: 'KW_UNIQUE'? 'KW_INDEX' IfNotExists? FullIndexName
@@ -130,11 +130,11 @@ CreateVirtualTableStmt =
     ModuleName ModuleArgList?
 
 ModuleArgList = 
-    '(' 'module-argument' items: (',' 'module-argument')* ')'
+    '(' ModuleArg items: (',' ModuleArg)* ')'
 
 // TODO: Support ModuleArg properly, it is much more expressive than just these
 ModuleArg = 
-    'STR_LIT' | '$NUMERIC_LIT'
+    'STR_LIT' | 'INT_LIT' | 'REAL_LIT' | 'HEX_LIT'
 
 DeleteStmt = 
     'KW_DELETE' 'KW_FROM' QualifiedTableName WhereClause? ReturningClause?
@@ -157,7 +157,7 @@ DropViewStmt =
 
 UpdateStmt = 
     'KW_UPDATE' ('KW_OR' ConflictAction)? QualifiedTableName 
-    'KW_SET' SetColumnExpr set_expressions: (',' SetColumnExpr) 
+    'KW_SET' SetColumnExpr set_expressions: (',' SetColumnExpr)*
     FromClause? WhereClause? ReturningClause? UpdateStmtLimited?
 
 // UpdateStmtLimited is not the same as DeleteStmtLimited! Here, LimitClause is optional
@@ -169,12 +169,15 @@ InsertStmt =
     ReturningClause?
 
 InsertStmtKind = 
-    replace: 'KW_REPLACE' | ('KW_INSERT' ('KW_OR' ConflictAction)? )
+    'KW_REPLACE' | InsertOrAction
+
+InsertOrAction =
+    'KW_INSERT' ('KW_OR' ConflictAction)?
 
 InsertValueKind = InsertValuesClause | InsertSelectClause | InsertDefaultValuesClause
 
 InsertValuesClause = 
-    'KW_VALUES' ExprList expr_lists: (',' ExprList)* UpsertClause*
+    'KW_VALUES' ExprList expr_lists: (',' ExprList)* upsert_clauses: UpsertClause*
 
 InsertSelectClause =
     SelectStmtWithCte UpsertClause?
@@ -183,13 +186,13 @@ InsertDefaultValuesClause =
     'KW_DEFAULT' 'KW_VALUES'
 
 UpsertClause =
-    'KW_ON' 'KW_CONFLICT' UpsertClauseConflictTarget? 'KW_DO' action: (UpsertDoUpdate | 'KW_NOTHING')
+    'KW_ON' 'KW_CONFLICT' UpsertClauseConflictTarget? 'KW_DO' upsert_clause_action: (UpsertDoUpdate | 'KW_NOTHING')
 
 UpsertDoUpdate = 
-    'KW_UPDATE' 'KW_SET' SetColumnExpr set_expressions: (',' SetColumnExpr) WhereClause?
+    'KW_UPDATE' 'KW_SET' SetColumnExpr set_expressions: (',' SetColumnExpr)* WhereClause?
 
 SetColumnExpr = 
-    left: (ColumnName | ColNameList) '=' Expr
+    set_column_kind: (ColumnName | ColNameList) '=' Expr
 
 UpsertClauseConflictTarget = 
     IndexedColList WhereClause?
@@ -276,7 +279,7 @@ TableOptWithoutRowId =
 
 TableConstraint =
     ('KW_CONSTRAINT' ConstraintName)? 
-    (TablePkConstraint | TableUqConstraint | CheckConstraint | TableFkConstraint)
+    table_constraint_kind: (TablePkConstraint | TableUqConstraint | CheckConstraint | TableFkConstraint)
 
 TablePkConstraint = 
     'KW_PRIMARY' 'KW_KEY' IndexedColList ConflictClause?
@@ -291,18 +294,18 @@ ColNameList =
     '(' ColumnName items: (',' ColumnName)* ')'
 
 FkClause = 
-    'KW_REFERENCES' TableName ColNameList? fk_actions: FkAction* FkDeferrable?
+    'KW_REFERENCES' TableName ColNameList? fk_actions: FkViolateAction* FkDeferrable?
 
-FkAction = 
-    action: (FkOnAction | FkMatchAction)
+FkViolateAction = 
+    fk_on_or_match: (FkOnAction | FkMatchAction)
 
 FkMatchAction = 
     'KW_MATCH' AnyValidName
 
 FkOnAction =
     'KW_ON' 
-    action_kind: ('KW_DELETE' | 'KW_UPDATE')
-    action_result: (FkSetNull | FkSetDefault | FkCascade | FkRestrict | FkNoAction)
+    fk_fail_kind: ('KW_DELETE' | 'KW_UPDATE')
+    fk_action: (FkSetNull | FkSetDefault | FkCascade | FkRestrict | FkNoAction)
 
 FkDeferrable =
     not: 'KW_NOT'? 'KW_DEFERRABLE' ('KW_INITIALLY' defer_kind: ('KW_DEFERRED' | 'KW_IMMEDIATE'))?
@@ -354,7 +357,7 @@ ValuesSelect =
     'KW_VALUES' ExprList
 
 SelectStmt =
-    SelectCore CompoundSelect* OrderByClause? LimitClause?
+    SelectCore compound_selects: (CompoundSelect*) OrderByClause? LimitClause?
 
 SelectStmtWithCte =
     CteClause? SelectStmt
@@ -372,7 +375,7 @@ ResultColumnList =
     ResultColumn items: (',' ResultColumn)*
 
 FromClause = 
-    'KW_FROM' item: (TableOrSubquery | JoinClause)
+    'KW_FROM' from_clause_value: (TableOrSubquery | JoinClause)
 
 GroupByClause =
     'KW_GROUP' 'KW_BY' Expr items: (',' Expr)*
@@ -397,7 +400,7 @@ WindowPartitionByClause =
 
 FrameSpec =
     range: ('KW_RANGE' | 'KW_ROWS' | 'KW_GROUPS')
-    kind: (FrameSpecBetweenClause | FrameSpecUnboundedPreceding | FrameSpecPreceding | FrameSpecCurrentRow)
+    frame_spec_kind: (FrameSpecBetweenClause | FrameSpecUnboundedPreceding | FrameSpecPreceding | FrameSpecCurrentRow)
     FrameSpecExcludeClause?
 
 FrameSpecExcludeClause =
@@ -433,7 +436,7 @@ FrameSpecFollowing =
     Expr 'KW_FOLLOWING'
 
 TableOrSubquery =
-    QualifiedTableName | FromClauseTableValueFunction | ('(' SelectStmtWithCte ')' WithAlias?) | ('(' (JoinClause | TableOrSubquery) ')')
+    QualifiedTableName | FromClauseTableValueFunction | FromClauseSelectStmt | ('(' JoinClause ')') | ('(' TableOrSubquery ')')
 
 FromClauseTableValueFunction =
     FullTableFunctionName ExprList WithAlias?
@@ -453,13 +456,19 @@ FromClauseSelectStmt =
 //     JoinOperator right: TableOrSubquery JoinConstraint?
 
 JoinClause =
-    (left: (TableOrSubquery | JoinClause) JoinOperator right: (TableOrSubquery | JoinClause) JoinConstraint?) 
+    (left_operand: (TableOrSubquery | JoinClause) JoinOperator right_operand: (TableOrSubquery | JoinClause) JoinConstraint?) 
 
 // JoinClauseRightSide =
 //     JoinOperator right: TableOrSubquery JoinConstraint?
 
 JoinConstraint = 
-    ('KW_ON' on_expr: Expr) | ('KW_USING' ColNameList)
+    OnConstraint | UsingConstraint
+
+OnConstraint =
+    'KW_ON' on_expr: Expr
+
+UsingConstraint =
+    'KW_USING' ColNameList
 
 JoinOperator = 
     CommaJoin | NonCommaJoin
@@ -529,7 +538,7 @@ CheckConstraint =
     'KW_CHECK' '(' Expr ')'
 
 DefaultConstraint = 
-    'KW_DEFAULT' value: (DefaultConstraintExpr | DefaultConstraintLiteral | SignedNumber)
+    'KW_DEFAULT' default_value_kind: (DefaultConstraintExpr | DefaultConstraintLiteral | SignedNumber)
 
 DefaultConstraintExpr = 
     '(' Expr ')'
@@ -582,7 +591,7 @@ CaseElseClause =
     'KW_ELSE' Expr
 
 CaseWhenClause =
-    'KW_WHEN' when: Expr 'KW_THEN' then: Expr
+    'KW_WHEN' when_expr: Expr 'KW_THEN' then_expr: Expr
 
 ExprFunc =
     FunctionName '(' FuncArguments? ')' FilterClause? OverClause?
@@ -676,10 +685,10 @@ OpNotLike =
     'KW_NOT' 'KW_LIKE' Expr ('KW_ESCAPE' escape: 'STR_LIT')?
 
 OpNotBetweenAnd = 
-    Expr 'KW_NOT' 'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
+    target: Expr 'KW_NOT' 'KW_BETWEEN' low: Expr 'KW_AND' high: Expr
 
 OpBetweenAnd = 
-    Expr 'KW_BETWEEN' lhs: Expr 'KW_AND' rhs: Expr
+    target: Expr 'KW_BETWEEN' low: Expr 'KW_AND' high: Expr
 
 OpConcat =
     lhs: Expr '||' rhs: Expr
@@ -779,7 +788,7 @@ OpIsNot =
 
 TypeName = 
     TypeNameWord words: TypeNameWord* 
-    ('(' l_num__a: SignedNumber (',' r_num__b: SignedNumber)? ')')?
+    ('(' left: SignedNumber (',' right: SignedNumber)? ')')?
 
 SignedNumber = number_sign: ('+' | '-')? number: '$NUMERIC_LIT'
 
@@ -792,6 +801,9 @@ SchemaName =
 TableName = 
     value:  '$NAME'
 
+NewTableName = 
+    value:  '$NAME'
+
 TriggerName = 
     value: '$NAME'
 
@@ -802,6 +814,9 @@ TableOrIndexName =
     value: '$NAME'
 
 ColumnName = 
+    value: '$NAME'
+
+NewColumnName = 
     value: '$NAME'
 
 IndexName = 
