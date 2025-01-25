@@ -361,7 +361,7 @@ macro_rules! T {
 }
 
 impl SqliteTokenKind {
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         use SqliteTokenKind::*;
 
         match self {

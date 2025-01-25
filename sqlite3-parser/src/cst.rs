@@ -1,49 +1,15 @@
-use crate::{SqliteParseError, SqliteTokenKind, SqliteTreeKind};
-use enumset::EnumSet;
+//! Initally based on: https://github.com/mamcx/tree-flat
+use std::num::NonZeroUsize;
+
 use smol_str::SmolStr;
-use std::fmt::Write;
 
-/// Tree and Token node terminology comes from matklad's [error resilient parser article]
-/// (https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html)
-pub struct SqliteUntypedAst {
-    nodes: Vec<SqliteNode>,
-    pub errors: Vec<SqliteParseError>,
-}
+use crate::{ast, SqliteParseError, SqliteTokenKind, SqliteTreeKind};
 
 #[derive(Debug)]
-pub enum SqliteNode {
-    Tree(TreeChild),
-    Token(TokenChild),
-    Error(ErrorChild),
-}
-
-#[derive(Debug)]
-pub struct TreeChild {
-    pub kind: SqliteTreeKind,
-    pub children: Vec<NodeId>,
-    pub parent: Option<NodeId>,
-    pub idx: NodeId,
-}
-
-#[derive(Debug)]
-pub struct TokenChild {
-    pub token: SqliteToken,
-    pub parent: NodeId,
-    pub idx: NodeId,
-}
-
-#[derive(Debug)]
-pub struct ErrorChild {
-    pub error_idx: u16,
-    pub children: Vec<NodeId>,
-    pub parent: Option<NodeId>,
-    pub idx: NodeId,
-}
-
-impl TokenChild {
-    fn full_text(&self, text: &mut String) {
-        text.push_str(&self.token.text);
-    }
+pub enum CstNodeData {
+    Tree(SqliteTreeKind),
+    Token(SqliteToken),
+    Error(usize),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -53,582 +19,355 @@ pub struct SqliteToken {
     pub abs_pos: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct NodeId(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeId(NonZeroUsize);
 
-pub struct AncestorIter<'a> {
-    curr: Option<&'a SqliteNode>,
-    ast: &'a SqliteUntypedAst,
+#[derive(Debug, Clone, Copy)]
+pub struct CstNode<'a> {
+    pub id: NodeId,
+    pub data: &'a CstNodeData,
+    pub cst: &'a SqliteUntypedCst,
 }
 
-pub struct NodePrinter<'a> {
-    node: &'a SqliteNode,
-    ast: &'a SqliteUntypedAst,
+#[derive(Debug)]
+pub struct CstMut<'a> {
+    pub id: NodeId,
+    pub parent: NodeId,
+    pub cst: &'a mut SqliteUntypedCst,
 }
 
-impl<'a> Iterator for AncestorIter<'a> {
-    type Item = (NodeId, &'a SqliteNode);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let parent = self.curr?.parent().map(|it| (it, it.as_node(self.ast)));
-        self.curr = parent.map(|(_parent_id, parent)| parent);
-
-        return parent;
-    }
-}
-
-impl SqliteUntypedAst {
-    pub fn root(&self) -> &SqliteNode {
-        debug_assert!(!self.nodes.is_empty());
-        &self.nodes[0]
-    }
-
-    pub fn nodes(&self) -> impl DoubleEndedIterator<Item = (NodeId, &SqliteNode)> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .map(|(idx, node)| (NodeId::new(idx), node))
-    }
-
-    pub fn allocate(&mut self, node: SqliteNode) {
-        self.nodes.push(node);
-    }
-
-    pub fn next_idx(&self) -> NodeId {
-        NodeId(self.nodes.len())
-    }
-
-    pub fn node_ref(&self, id: NodeId) -> &SqliteNode {
-        &self.nodes[id.0]
-    }
-
-    pub fn new() -> Self {
-        SqliteUntypedAst {
-            nodes: Vec::new(),
-            errors: Vec::new(),
-        }
-    }
-
-    pub fn find_associated_err(&self, node: &SqliteNode) -> Option<&SqliteParseError> {
-        node.error_child()
-            .and_then(|it| self.errors.get(it.error_idx as usize))
-    }
-
-    pub fn add_child(&mut self, parent: NodeId, child: NodeId) {
-        match &mut self.nodes[parent.0] {
-            node @ SqliteNode::Tree { .. } => node.add_child(child),
-            node @ SqliteNode::Error { .. } => node.add_child(child),
-            _ => panic!("Node is a not a tree node"),
-        }
-    }
-
-    pub fn add_errors(&mut self, mut errors: Vec<SqliteParseError>) {
-        self.errors = std::mem::take(&mut errors)
-    }
-}
-
-impl std::fmt::Debug for SqliteUntypedAst {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut buf = String::new();
-        self.root().print(&mut buf, 0, self);
-        write!(f, "{}", buf)
-    }
-}
-
-impl<'a> std::fmt::Debug for NodePrinter<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut buf = String::new();
-        self.node.print(&mut buf, 0, self.ast);
-        write!(f, "{}", buf)
-    }
+#[derive(Debug)]
+pub struct SqliteUntypedCst {
+    pub(crate) data: Vec<CstNodeData>,
+    // pub(crate) level: Vec<usize>,
+    pub(crate) parent: Vec<usize>,
+    pub(crate) children: Vec<Vec<usize>>, // Inner vec should be optimized
+    pub(crate) errors: Vec<SqliteParseError>,
 }
 
 impl NodeId {
-    pub fn new(id: usize) -> Self {
-        Self(id)
-    }
-    pub fn add_tree_child<'i, 'a>(
-        &self,
-        ast: &mut SqliteUntypedAst,
-        kind: SqliteTreeKind,
-    ) -> NodeId {
-        let child_idx = ast.next_idx();
-        ast.allocate(SqliteNode::new_tree_node(kind, Some(*self), child_idx));
-
-        ast.add_child(*self, child_idx);
-
-        child_idx
+    pub fn from_index(n: usize) -> Self {
+        NodeId(NonZeroUsize::new(n + 1).unwrap())
     }
 
-    pub fn add_token_child<'i, 'a>(
-        &self,
-        ast: &mut SqliteUntypedAst,
-        token: SqliteToken,
-    ) -> NodeId {
-        let child_idx = ast.next_idx();
-        ast.allocate(SqliteNode::new_token_node(token, *self, child_idx));
-
-        ast.add_child(*self, child_idx);
-
-        child_idx
+    pub fn to_index(self) -> usize {
+        self.0.get() - 1
     }
 
-    pub fn add_error_child<'i, 'a>(&self, ast: &mut SqliteUntypedAst, error_idx: u16) -> NodeId {
-        let child_idx = ast.next_idx();
-        ast.allocate(SqliteNode::new_error_node(
-            error_idx,
-            Some(*self),
-            child_idx,
-        ));
-
-        ast.add_child(*self, child_idx);
-
-        child_idx
-    }
-
-    pub fn as_node<'i, 'a>(&self, ast: &'a SqliteUntypedAst) -> &'a SqliteNode {
-        ast.node_ref(*self)
+    pub fn is_root(&self) -> bool {
+        self.to_index() == 0
     }
 }
 
-impl From<usize> for NodeId {
-    fn from(value: usize) -> Self {
-        NodeId(value)
-    }
-}
-
-impl ErrorChild {
-    pub fn children<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
-        self.children.iter().map(|child_id| child_id.as_node(ast))
+impl SqliteUntypedCst {
+    pub fn new(root: SqliteTreeKind) -> Self {
+        Self::with_capacity(root, 1)
     }
 
-    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
-        for child in self.children(ast) {
-            child.full_text(ast, text);
-        }
-    }
-}
-
-impl TreeChild {
-    pub fn children<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
-        self.children.iter().map(|child_id| child_id.as_node(ast))
-    }
-
-    pub fn non_trivial_children<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
-        self.children
-            .iter()
-            .map(|child_id| child_id.as_node(ast))
-            .filter(|it| !it.is_trivial_node())
-    }
-
-    pub fn valid_children<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
-        self.children(ast)
-            .filter(|it| !it.is_trivial_node() && it.error_child().is_none())
-    }
-
-    pub fn find_child<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        key: impl ChildNodeKey,
-    ) -> Option<&'a SqliteNode> {
-        key.find_children(self, ast).next()
-    }
-
-    pub fn find_token_child<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        key: SqliteTokenKind,
-    ) -> impl DoubleEndedIterator<Item = &'a SqliteNode> {
-        self.children(ast)
-            .filter(move |child| child.token_kind() == Some(key))
-    }
-
-    pub fn find_token_child_any<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        key: EnumSet<SqliteTokenKind>,
-    ) -> Option<&'a SqliteNode> {
-        self.children(ast).find_map(|it| match it {
-            SqliteNode::Token(leaf) => {
-                if key.contains(leaf.token.kind) {
-                    Some(it)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        })
-    }
-
-    /// NOTE: Trival tokens
-    pub fn find_token_group<'a, T: PartialEq + Copy>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        needle: &[T],
-        func: impl Fn(&'a SqliteToken, T) -> bool,
-    ) -> Option<&[NodeId]> {
-        assert!(!needle.is_empty());
-
-        'outer: for window_start_idx in 0..self.children.len() {
-            let mut window = self.children[window_start_idx..]
-                .iter()
-                .map(|it| it.as_node(ast).token_child());
-
-            let mut result_group_end = window_start_idx;
-
-            let mut needle_iter = needle.iter().peekable();
-
-            while let Some(n) = needle_iter.peek() {
-                // NOTE: The order of these match clauses matter. We allow having trivial token
-                // kinds in the needle. As
-                match window.next().flatten() {
-                    Some(TokenChild { token, .. }) if func(token, **n) => {
-                        needle_iter.next();
-                        result_group_end += 1
-                    }
-                    // We only include trivial tokens in the result group if they result group
-                    // already contains a non trivial token (i.e. our result group length > 0)
-                    Some(TokenChild { token, .. })
-                        if token.is_trivia() && result_group_end != window_start_idx =>
-                    {
-                        result_group_end += 1;
-                    }
-                    _ => continue 'outer,
-                }
-            }
-
-            return Some(&self.children[window_start_idx..result_group_end]);
-        }
-
-        None
-    }
-
-    pub fn find_children<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        key: impl ChildNodeKey,
-    ) -> impl Iterator<Item = &'a SqliteNode> {
-        key.find_children(self, ast)
-    }
-
-    /// NOTE: Trival tokens
-    pub fn find_token_kind_group<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        needle: &[SqliteTokenKind],
-    ) -> Option<&[NodeId]> {
-        self.find_token_group(ast, needle, |lhs, rhs| lhs.kind == rhs)
-    }
-
-    /// WARNING: Skips trival nodes, case insensitive
-    pub fn find_token_text_group<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        needle: &[&'static str],
-    ) -> Option<&'a [NodeId]> {
-        self.find_token_group(ast, needle, |lhs, rhs| lhs.text_matches(rhs))
-    }
-
-    pub fn find_token_text<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-        text_to_find: &'static str,
-    ) -> Option<&'a SqliteNode> {
-        self.children(ast).find(|it| {
-            it.token_child()
-                .is_some_and(|it| it.token.text_matches(text_to_find))
-        })
-    }
-
-    pub fn first_token_descendant<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> Option<&'a TokenChild> {
-        let childless_parent = |node: &&SqliteNode| match node {
-            SqliteNode::Error(n) => n.children.is_empty(),
-            SqliteNode::Tree(n) => n.children.is_empty(),
-            _ => false,
+    pub fn with_capacity(root: SqliteTreeKind, capacity: usize) -> Self {
+        let mut cst = SqliteUntypedCst {
+            data: Vec::with_capacity(capacity),
+            // level: Vec::with_capacity(capacity),
+            parent: Vec::with_capacity(capacity),
+            children: Vec::with_capacity(capacity),
+            errors: Vec::new(),
         };
+        cst.push(CstNodeData::Tree(root), NodeId::from_index(0));
 
-        let mut curr_node = self.children(ast).skip_while(childless_parent).next();
+        cst
+    }
 
-        loop {
-            match curr_node {
-                Some(SqliteNode::Tree(tree)) => {
-                    curr_node = tree.children(ast).skip_while(childless_parent).next();
-                }
-                Some(SqliteNode::Error(err)) => {
-                    curr_node = err.children(ast).skip_while(childless_parent).next();
-                }
-                Some(SqliteNode::Token(leaf)) => return Some(leaf),
-                None => return None,
-            }
+    pub(crate) fn add_errors(&mut self, errors: Vec<SqliteParseError>) {
+        self.errors = errors;
+    }
+
+    pub fn errors(&self) -> &[SqliteParseError] {
+        &self.errors
+    }
+
+    pub fn typed_ast(&self) -> ast::File {
+        ast::File::cast(self.root()).unwrap()
+    }
+
+    pub fn push(&mut self, data: CstNodeData, parent: NodeId) -> NodeId {
+        let parent_idx = parent.to_index();
+
+        self.data.push(data);
+        // self.level.push(level);
+        self.parent.push(parent_idx);
+        self.children.push(Vec::new());
+
+        let new_node_idx = self.data.len() - 1;
+
+        if new_node_idx != parent_idx {
+            self.children[parent_idx].push(new_node_idx);
+        }
+
+        NodeId::from_index(new_node_idx)
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    // pub fn get_level(&self, id: NodeId) -> usize {
+    //     if id.to_index() == 0 {
+    //         0
+    //     } else {
+    //         self.level[id.to_index()]
+    //     }
+    // }
+
+    pub fn node(&self, id: NodeId) -> CstNode {
+        assert!(id.to_index() < self.data.len());
+        CstNode {
+            id,
+            data: &self.data[id.to_index()],
+            cst: self,
         }
     }
 
-    pub fn last_token_descendant<'a>(
-        &'a self,
-        ast: &'a SqliteUntypedAst,
-    ) -> Option<&'a TokenChild> {
-        let childless_parent = |node: &&SqliteNode| match node {
-            SqliteNode::Error(n) => n.children.is_empty(),
-            SqliteNode::Tree(n) => n.children.is_empty(),
+    pub fn nodes<'a>(&'a self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+        (0..self.data.len()).map(|it| self.node(NodeId::from_index(it)))
+    }
+
+    pub fn node_mut(&mut self, id: NodeId) -> CstMut {
+        assert!(id.to_index() < self.data.len());
+
+        let parent = NodeId::from_index(self.parent[id.to_index()]);
+
+        CstMut {
+            id,
+            parent,
+            cst: self,
+        }
+    }
+
+    pub fn root(&self) -> CstNode {
+        assert!(!self.data.is_empty());
+
+        self.node(NodeId::from_index(0))
+    }
+
+    pub fn root_mut(&mut self) -> CstMut {
+        assert!(!self.data.is_empty());
+
+        self.node_mut(NodeId::from_index(0))
+    }
+}
+
+impl<'a> CstMut<'a> {
+    pub fn parent_mut(self) -> CstMut<'a> {
+        assert!(self.id.to_index() != 0);
+
+        self.cst.node_mut(self.parent)
+    }
+
+    pub fn push_tree(mut self, tree: SqliteTreeKind) -> CstMut<'a> {
+        let new_node_id = self.append(CstNodeData::Tree(tree));
+
+        CstMut {
+            id: new_node_id,
+            parent: self.id,
+            cst: self.cst,
+        }
+    }
+
+    pub fn push_token(&mut self, token: SqliteToken) -> CstMut {
+        let new_node_id = self.append(CstNodeData::Token(token));
+
+        CstMut {
+            id: new_node_id,
+            parent: self.id,
+            cst: self.cst,
+        }
+    }
+
+    pub fn push_error(mut self, error_idx: usize) -> CstMut<'a> {
+        let new_node_id = self.append(CstNodeData::Error(error_idx));
+
+        CstMut {
+            id: new_node_id,
+            parent: self.id,
+            cst: self.cst,
+        }
+    }
+
+    pub fn append(&mut self, data: CstNodeData) -> NodeId {
+        self.cst.push(data, self.id)
+    }
+}
+
+impl CstNodeData {
+    pub fn is_trivial(&self) -> bool {
+        match self {
+            CstNodeData::Token(tk) => tk.is_trivia(),
             _ => false,
-        };
-
-        let mut curr_node = self.children(ast).rev().skip_while(childless_parent).next();
-
-        loop {
-            match curr_node {
-                Some(SqliteNode::Tree(tree)) => {
-                    curr_node = tree.children(ast).rev().skip_while(childless_parent).next();
-                }
-                Some(SqliteNode::Error(err)) => {
-                    curr_node = err.children(ast).rev().skip_while(childless_parent).next();
-                }
-                Some(SqliteNode::Token(leaf)) => return Some(leaf),
-                None => return None,
-            }
-        }
-    }
-
-    pub fn node_start(&self, ast: &SqliteUntypedAst) -> Option<u32> {
-        self.first_token_descendant(&ast).map(|n| n.token.start())
-    }
-
-    pub fn node_end(&self, ast: &SqliteUntypedAst) -> Option<u32> {
-        self.last_token_descendant(&ast).map(|n| n.token.end())
-    }
-
-    pub fn node_range(&self, ast: &SqliteUntypedAst) -> Option<(u32, u32)> {
-        let start = self.node_start(ast)?;
-        let end = self.node_end(ast)?;
-
-        Some((start, end))
-    }
-
-    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
-        for child in self.children(ast) {
-            child.full_text(ast, text);
         }
     }
 }
 
-impl SqliteNode {
-    pub fn new_tree_node(kind: SqliteTreeKind, parent: Option<NodeId>, idx: NodeId) -> Self {
-        Self::Tree(TreeChild {
-            kind,
-            children: Vec::new(),
-            parent,
-            idx,
-        })
-    }
-
-    fn new_error_node(error_idx: u16, parent: Option<NodeId>, idx: NodeId) -> SqliteNode {
-        Self::Error(ErrorChild {
-            error_idx,
-            children: Vec::new(),
-            parent,
-            idx,
-        })
-    }
-
-    pub fn new_token_node(token: SqliteToken, parent: NodeId, idx: NodeId) -> Self {
-        Self::Token(TokenChild { token, parent, idx })
-    }
-
-    pub fn tree_child(&self) -> Option<&TreeChild> {
-        match self {
-            SqliteNode::Tree(tree) => Some(tree),
-            _ => None,
-        }
-    }
-
-    pub fn error_child(&self) -> Option<&ErrorChild> {
-        match self {
-            SqliteNode::Error(err) => Some(err),
-            _ => None,
-        }
-    }
-
-    pub fn token_child(&self) -> Option<&TokenChild> {
-        match self {
-            SqliteNode::Token(leaf) => Some(leaf),
-            _ => None,
-        }
-    }
-
-    pub fn add_child(&mut self, child: NodeId) {
-        match self {
-            Self::Tree(tree) => tree.children.push(child),
-            Self::Error(err) => err.children.push(child),
-            Self::Token { .. } => panic!("Cannot add child to token node"),
-        }
-    }
-
-    fn print(&self, buf: &mut String, level: usize, ast: &SqliteUntypedAst) {
-        let indent = "  ".repeat(level);
-
-        match self {
-            Self::Tree(tree) => {
-                std::write!(buf, "{indent}{:?}\n", tree.kind).unwrap();
-                for child in tree.children(ast) {
-                    child.print(buf, level + 1, ast)
-                }
-            }
-            Self::Error(err) => {
-                std::write!(buf, "{indent}{:?}\n", "Error").unwrap();
-                for child in err.children(ast) {
-                    child.print(buf, level + 1, ast)
-                }
-            }
-            Self::Token(leaf) => {
-                if !leaf.token.is_trivia() {
-                    std::write!(
-                        buf,
-                        "{indent}'{}` - {:?}\n",
-                        leaf.token.text,
-                        leaf.token.kind
-                    )
-                    .unwrap();
-                }
-            }
-        }
-        assert!(buf.ends_with('\n'));
-    }
-
-    pub fn parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Tree(tree) => tree.parent,
-            Self::Error(err) => err.parent,
-            Self::Token(leaf) => Some(leaf.parent),
-        }
-    }
-
-    pub fn idx(&self) -> NodeId {
-        match self {
-            SqliteNode::Tree(tree_child) => tree_child.idx,
-            SqliteNode::Token(token_child) => token_child.idx,
-            SqliteNode::Error(error_child) => error_child.idx,
-        }
-    }
-
-    pub fn ancestors<'a>(&'a self, ast: &'a SqliteUntypedAst) -> AncestorIter<'a> {
-        AncestorIter {
-            curr: Some(self),
-            ast,
-        }
-    }
-
-    pub fn parent_as_node<'a>(&'a self, ast: &'a SqliteUntypedAst) -> Option<&'a SqliteNode> {
-        self.parent().map(|n_id| n_id.as_node(ast))
-    }
-
-    pub fn tree_kind(&self) -> Option<SqliteTreeKind> {
-        match self {
-            Self::Tree(tree) => Some(tree.kind),
+impl<'a> CstNode<'a> {
+    pub fn token(&self) -> Option<&'a SqliteToken> {
+        match &self.data {
+            CstNodeData::Token(tk) => Some(tk),
             _ => None,
         }
     }
 
     pub fn token_kind(&self) -> Option<SqliteTokenKind> {
-        match self {
-            Self::Token(leaf) => Some(leaf.token.kind),
+        match &self.data {
+            CstNodeData::Token(tk) => Some(tk.kind),
             _ => None,
         }
     }
 
-    pub fn token_text(&self) -> Option<&str> {
-        match self {
-            Self::Token(leaf) => Some(leaf.token.text.as_str()),
+    pub fn error(&self) -> Option<&'a SqliteParseError> {
+        match &self.data {
+            CstNodeData::Error(err_idx) => self.cst.errors.get(*err_idx),
             _ => None,
         }
     }
 
-    // TODO: Optimize
-    pub fn as_str(&self) -> &str {
-        match self {
-            SqliteNode::Tree(tree) => tree.kind.into(),
-            SqliteNode::Token(leaf) => leaf.token.kind.as_str(),
-            SqliteNode::Error(_) => "Error",
+    pub fn tree(&self) -> Option<SqliteTreeKind> {
+        match &self.data {
+            CstNodeData::Tree(tree) => Some(*tree),
+            _ => None,
         }
     }
 
-    pub fn printer<'a>(&'a self, ast: &'a SqliteUntypedAst) -> NodePrinter<'a> {
-        NodePrinter { node: self, ast }
+    /// Panics if self is root
+    pub fn parent(self) -> CstNode<'a> {
+        assert!(!self.id.is_root());
+
+        let parent_id = NodeId::from_index(self.cst.parent[self.id.to_index()]);
+        self.cst.node(parent_id)
     }
 
-    pub fn full_text(&self, ast: &SqliteUntypedAst, text: &mut String) {
-        match self {
-            SqliteNode::Tree(tree) => tree.full_text(ast, text),
-            SqliteNode::Token(token) => token.full_text(text),
-            SqliteNode::Error(err) => err.full_text(ast, text),
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+        self.cst.children[self.id.to_index()]
+            .iter()
+            .map(|it| self.cst.node(NodeId::from_index(*it)))
+    }
+
+    pub fn non_trivial_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+        self.children()
+            .filter(|it| !it.token().is_some_and(|it| it.is_trivia()))
+    }
+
+    pub fn valid_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+        self.non_trivial_children()
+            .filter(|it| it.error().is_none())
+    }
+
+    pub fn find_children(&self, key: impl ChildNodeKey) -> impl Iterator<Item = CstNode<'a>> {
+        key.find_children(*self)
+    }
+
+    // Iterate over earlier siblings (In insertion order)
+    pub fn left_siblings(&self) -> impl Iterator<Item = CstNode<'a>> + '_ {
+        self.parent().children().take_while(|it| it.id != self.id)
+    }
+
+    // Iterate over later siblings (In insertion order)
+    pub fn right_siblings(&self) -> impl Iterator<Item = CstNode<'a>> + '_ {
+        // Run the iterator until we find ourselves
+        let mut iter = self.parent().children();
+        iter.find(|it| it.id == self.id).unwrap();
+
+        iter
+    }
+
+    // Iterate over siblings (In insertion order), skipping ourselves
+    pub fn siblings(&self) -> impl Iterator<Item = CstNode<'a>> + '_ {
+        self.left_siblings().chain(self.right_siblings())
+    }
+
+    pub fn ancestors(&self) -> AncestorIter<'a> {
+        AncestorIter { curr: *self }
+    }
+
+    pub fn descendants<'b>(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+        let mut curr = *self;
+
+        let mut youngest_descendant = self.id.to_index();
+        while let Some(descendant) = curr.last_non_trivial_child_idx() {
+            youngest_descendant = descendant;
+            curr = self.cst.node(NodeId::from_index(descendant));
+        }
+
+        let start = self.id.to_index() + 1;
+        let end = youngest_descendant;
+
+        // NOTE: if start is greater than end, we will get an empty iterator
+        (start..=end).map(|it| self.cst.node(NodeId::from_index(it)))
+    }
+
+    fn last_non_trivial_child_idx(&self) -> Option<usize> {
+        self.non_trivial_children()
+            .last()
+            .map(|it| it.id.to_index())
+    }
+
+    fn is_root(&self) -> bool {
+        self.id == NodeId::from_index(0)
+    }
+
+    fn is_trivia(&self) -> bool {
+        self.token().is_some_and(|it| it.is_trivia())
+    }
+
+    pub fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.print(f, self.id)?;
+
+        for descendant in self.descendants().filter(|it| !it.is_trivia()) {
+            descendant.print(f, self.id)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self.data {
+            CstNodeData::Tree(tree_kind) => tree_kind.into(),
+            CstNodeData::Token(tk) => tk.kind.as_str(),
+            CstNodeData::Error(_) => "Error",
         }
     }
 
-    pub fn is_trivial_node(&self) -> bool {
-        matches!(self, SqliteNode::Token(leaf) if leaf.token.is_trivia())
-    }
+    pub fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result {
+        let mut s = format!("{}", self.data);
 
-    pub fn has_parse_error(&self, ast: &SqliteUntypedAst) -> bool {
-        match self {
-            SqliteNode::Error(_) => true,
-            SqliteNode::Tree(tree) => tree.children(ast).any(|it| it.has_parse_error(ast)),
-            SqliteNode::Token(_) => false,
+        if self.id == custom_root {
+            return writeln!(f, "{s}");
         }
-    }
-}
 
-pub trait ChildNodeKey {
-    fn find_children<'a>(
-        self,
-        node: &'a TreeChild,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl Iterator<Item = &'a SqliteNode>;
-}
+        // Check if we are the last child of our parent
+        if self.parent().last_non_trivial_child_idx() == Some(self.id.to_index()) {
+            s = format!("└───{}", s);
+        } else {
+            s = format!("├───{}", s);
+        }
 
-impl ChildNodeKey for SqliteTokenKind {
-    fn find_children<'a>(
-        self,
-        node: &'a TreeChild,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl Iterator<Item = &'a SqliteNode> {
-        node.children(ast)
-            .filter(move |child| child.token_kind() == Some(self))
-    }
-}
+        let parent = self.parent();
+        if parent.id == custom_root {
+            return writeln!(f, "{s}");
+        }
 
-impl ChildNodeKey for SqliteTreeKind {
-    fn find_children<'a>(
-        self,
-        node: &'a TreeChild,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl Iterator<Item = &'a SqliteNode> {
-        node.children(ast)
-            .filter(move |child| child.tree_kind() == Some(self))
-    }
-}
+        let this_idx = self.id.to_index();
+        // Skip our parent - we start with grandparent
+        for ancestor in self.ancestors().skip(1) {
+            match ancestor.last_non_trivial_child_idx() {
+                Some(idx) if idx > this_idx => s = format!("├   {s}"),
+                _ => s = format!("    {s}"),
+            }
 
-impl ChildNodeKey for EnumSet<SqliteTokenKind> {
-    fn find_children<'a>(
-        self,
-        node: &'a TreeChild,
-        ast: &'a SqliteUntypedAst,
-    ) -> impl Iterator<Item = &'a SqliteNode> {
-        node.children(ast)
-            .filter(move |child| child.token_kind().is_some_and(|it| self.contains(it)))
+            if ancestor.id == custom_root {
+                break;
+            }
+        }
+
+        return writeln!(f, "{s}");
     }
 }
 
@@ -667,5 +406,64 @@ impl SqliteToken {
 
     pub fn text_matches(&self, other: &str) -> bool {
         self.text.eq_ignore_ascii_case(other)
+    }
+}
+
+impl std::fmt::Display for SqliteUntypedCst {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.root().print_subtree(f)
+    }
+}
+
+impl std::fmt::Display for CstNode<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.print_subtree(f)
+    }
+}
+
+impl std::fmt::Display for CstNodeData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CstNodeData::Tree(tree_kind) => std::write!(f, "{:?}", tree_kind),
+            CstNodeData::Token(token) => std::write!(f, "`{}` - {:?}", token.text, token.kind),
+            CstNodeData::Error(_) => f.write_str("Error"),
+        }
+    }
+}
+
+pub struct AncestorIter<'a> {
+    curr: CstNode<'a>,
+}
+
+impl<'a> Iterator for AncestorIter<'a> {
+    type Item = CstNode<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr.is_root() {
+            None
+        } else {
+            let parent = self.curr.parent();
+            self.curr = parent;
+
+            Some(parent)
+        }
+    }
+}
+
+pub trait ChildNodeKey {
+    fn find_children<'a>(self, node: CstNode<'a>) -> impl Iterator<Item = CstNode<'a>>;
+}
+
+impl ChildNodeKey for SqliteTokenKind {
+    fn find_children<'a>(self, node: CstNode<'a>) -> impl Iterator<Item = CstNode<'a>> {
+        node.children()
+            .filter(move |child| child.token().is_some_and(|it| it.kind == self))
+    }
+}
+
+impl ChildNodeKey for SqliteTreeKind {
+    fn find_children<'a>(self, node: CstNode<'a>) -> impl Iterator<Item = CstNode<'a>> {
+        node.children()
+            .filter(move |child| child.tree() == Some(self))
     }
 }

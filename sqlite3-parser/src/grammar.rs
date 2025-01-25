@@ -595,10 +595,14 @@ pub fn insert_stmt_kind(p: &mut SqliteParser, r: TokenSet) {
 
     let m = p.open();
 
-    if p.eat(KW_INSERT) {
-        if p.eat(KW_OR) {
-            conflict_action(p, r);
-        }
+    if p.at(KW_INSERT) {
+        p.wrap(InsertOrAction, |p| {
+            p.guaranteed(KW_INSERT);
+
+            if p.eat(KW_OR) {
+                conflict_action(p, r);
+            }
+        });
     } else {
         p.guaranteed(KW_REPLACE);
     }
@@ -1142,7 +1146,7 @@ pub fn rename_column(p: &mut SqliteParser, r: TokenSet) {
     p.eat(KW_COLUMN);
     must_eat_name(p, r, ColumnName);
     p.must_eat(KW_TO, r);
-    must_eat_name(p, r, ColumnName);
+    must_eat_name(p, r, NewColumnName);
 
     p.close(m, RenameColumn);
 }
@@ -1332,7 +1336,7 @@ pub fn fk_action(p: &mut SqliteParser, r: TokenSet) {
         unreachable!("DEV ERROR: fk_action is called wrong")
     }
 
-    p.close(m, FkAction);
+    p.close(m, FkViolateAction);
 }
 
 pub fn fk_deferrable(p: &mut SqliteParser, r: TokenSet) {
@@ -2233,10 +2237,16 @@ pub fn join_constraint(p: &mut SqliteParser, r: TokenSet) {
 
     let m = p.open();
 
-    if p.eat(KW_ON) {
-        expr(p, r);
-    } else if p.eat(KW_USING) {
-        col_name_list(p, r);
+    if p.at(KW_ON) {
+        p.wrap(OnConstraint, |p| {
+            p.guaranteed(KW_ON);
+            expr(p, r);
+        });
+    } else if p.at(KW_USING) {
+        p.wrap(UsingConstraint, |p| {
+            p.guaranteed(KW_USING);
+            col_name_list(p, r);
+        });
     } else {
         unreachable!()
     }
@@ -2466,12 +2476,14 @@ pub fn table_or_subquery(p: &mut SqliteParser, r: TokenSet) -> MarkClosed {
         qualified_table_name(p, r);
     } else if p.eat(T!['(']) {
         if SELECT_STMT_WITH_CTE_START.contains(p.nth(1)) {
-            select_stmt_with_cte(p, r | T![')']);
-            p.must_eat(T![')'], r);
+            p.wrap(FromClauseSelectStmt, |p| {
+                select_stmt_with_cte(p, r | T![')']);
+                p.must_eat(T![')'], r);
 
-            if p.at_any(p.with_alias_start) {
-                with_alias(p, r);
-            }
+                if p.at_any(p.with_alias_start) {
+                    with_alias(p, r);
+                }
+            });
         } else if table_or_subquery_start.contains(p.nth(1)) {
             join_clause(p, r | T![')']);
             p.must_eat(T![')'], r);

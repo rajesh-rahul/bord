@@ -1,6 +1,6 @@
-use std::sync::LazyLock;
-use crate::{SqliteNode, SqliteUntypedAst};
+use crate::{CstNode, CstNodeData};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 pub use ungrammar::{Node, NodeData, Rule, Token, TokenData};
 
 pub static UNGRAMMAR: LazyLock<Ungrammar> = LazyLock::new(|| Ungrammar::new());
@@ -42,6 +42,13 @@ impl Ungrammar {
         &self.inner[node_id]
     }
 
+    pub fn nodes(&self) -> impl Iterator<Item = &NodeData> {
+        self.inner.iter().map(|it| &self.inner[it])
+    }
+
+    pub fn tokens(&self) -> impl Iterator<Item = &TokenData> {
+        self.inner.tokens().map(|it| &self.inner[it])
+    }
     pub fn get_token(&self, token_id: Token) -> &str {
         &self.inner[token_id].name
     }
@@ -54,19 +61,19 @@ pub enum UngramNode<'a> {
         rule: &'static ungrammar::Rule,
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: &'a SqliteNode,
+        ast_stack_item: CstNode<'a>,
     },
     AltMarker {
         alt_marker_idx: usize,
         alt_marker_end_idx: usize,
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: &'a SqliteNode,
+        ast_stack_item: CstNode<'a>,
     },
     OptMarker {
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: &'a SqliteNode,
+        ast_stack_item: CstNode<'a>,
     },
     AltItemBegin,
 }
@@ -74,27 +81,27 @@ pub enum UngramNode<'a> {
 struct FallbackLocation<'a> {
     ungram_stack_len: usize,
     ast_stack_idx: usize,
-    ast_stack_item: &'a SqliteNode,
+    ast_stack_item: CstNode<'a>,
     node_list_len: usize,
 }
 
 pub struct UngramTraverser<'a> {
-    ast_stack: Vec<&'a SqliteNode>,
+    ast_stack: Vec<CstNode<'a>>,
     ungram_stack: Vec<UngramNode<'a>>,
     rules_history: Vec<&'static Rule>,
-    ast: &'a SqliteUntypedAst,
+    // ast: &'a SqliteUntypedCst,
 }
 
 pub enum UngramTraverserNodeKind<'a> {
     Token {
         name: &'static str,
-        ast_node: Option<&'a SqliteNode>,
+        ast_node: Option<CstNode<'a>>,
         rule: &'a Rule,
     },
     Tree {
         name: &'static str,
         rule: &'a Rule,
-        ast_node: Option<&'a SqliteNode>,
+        ast_node: Option<CstNode<'a>>,
     },
 }
 
@@ -106,8 +113,7 @@ pub enum UngramTraverserBacktrackResult {
 
 impl<'a> UngramTraverser<'a> {
     pub fn new(
-        ast_root: &'a SqliteNode,
-        ast: &'a SqliteUntypedAst,
+        ast_root: CstNode<'a>,
         ungram_root: &'static Rule,
     ) -> Self {
         let ast_stack = vec![ast_root];
@@ -115,7 +121,6 @@ impl<'a> UngramTraverser<'a> {
         Self {
             ast_stack,
             ungram_stack,
-            ast,
             rules_history: Vec::new(),
         }
     }
@@ -128,15 +133,12 @@ impl<'a> UngramTraverser<'a> {
         &self.ungram_stack
     }
 
-    pub fn ast_stack(&self) -> &[&'a SqliteNode] {
+    pub fn ast_stack(&self) -> &[CstNode<'a>] {
         &self.ast_stack
     }
 
     pub fn next<'b>(&'b mut self) -> Option<UngramTraverserNodeKind<'a>> {
         while !self.ast_stack.is_empty() || !self.ungram_stack.is_empty() {
-            // println!("---------");
-            // print_ast_stack(&self.ast_stack, ast);
-            // print_ugram_stack(&self.ungram_stack);
             let ungram_node = self.ungram_stack.last();
 
             let ungram_rule = match ungram_node {
@@ -149,7 +151,7 @@ impl<'a> UngramTraverser<'a> {
                             rule,
                             parent_list_len: self.rules_history.len(),
                             ast_stack_idx: self.ast_stack.len() - 1,
-                            ast_stack_item: self
+                            ast_stack_item: *self
                                 .ast_stack
                                 .last()
                                 .expect("DEV ERROR: self.ast_stack len guaranteed > 0"),
@@ -210,7 +212,7 @@ impl<'a> UngramTraverser<'a> {
                         continue;
                     }
 
-                    let ast_stack_item = self
+                    let ast_stack_item = *self
                         .ast_stack
                         .last()
                         .expect("DEV ERROR: Atleast one element expected");
@@ -229,7 +231,7 @@ impl<'a> UngramTraverser<'a> {
                         continue;
                     }
 
-                    let ast_stack_item = self
+                    let ast_stack_item = *self
                         .ast_stack
                         .last()
                         .expect("DEV ERROR: Atleast one element expected");
@@ -255,7 +257,7 @@ impl<'a> UngramTraverser<'a> {
                         break;
                     }
 
-                    let ast_stack_item = self
+                    let ast_stack_item = *self
                         .ast_stack
                         .last()
                         .expect("DEV ERROR: Atleast one element expected");
@@ -308,8 +310,7 @@ impl<'a> UngramTraverser<'a> {
                     .expect("DEV ERROR: ungram_stack len is always > 0");
             }
             while self.rules_history.len() >= marker.node_list_len {
-                self
-                    .rules_history
+                self.rules_history
                     .pop()
                     .expect("DEV ERROR: ungram_stack len is always > 0");
             }
@@ -340,7 +341,7 @@ impl<'a> UngramTraverser<'a> {
                     return Some(FallbackLocation {
                         ungram_stack_len: idx,
                         ast_stack_idx: *ast_stack_idx,
-                        ast_stack_item,
+                        ast_stack_item: *ast_stack_item,
                         node_list_len: *parent_list_len,
                     })
                 }
@@ -358,7 +359,7 @@ impl<'a> UngramTraverser<'a> {
                         return Some(FallbackLocation {
                             ungram_stack_len: *alt_marker_end_idx + 1,
                             ast_stack_idx: *ast_stack_idx,
-                            ast_stack_item,
+                            ast_stack_item: *ast_stack_item,
                             node_list_len: *parent_list_len + 1,
                         });
                     } else {
@@ -373,7 +374,7 @@ impl<'a> UngramTraverser<'a> {
                     return Some(FallbackLocation {
                         ungram_stack_len: idx,
                         ast_stack_idx: *ast_stack_idx,
-                        ast_stack_item,
+                        ast_stack_item: *ast_stack_item,
                         node_list_len: *parent_list_len,
                     })
                 }
@@ -398,7 +399,13 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(self.ast_stack.pop(), Some(SqliteNode::Token(_))) {
+        if !matches!(
+            self.ast_stack.pop(),
+            Some(CstNode {
+                data: CstNodeData::Token(_),
+                ..
+            })
+        ) {
             panic!("DEV ERROR: API Misuse")
         }
     }
@@ -417,7 +424,13 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(self.ast_stack.pop(), Some(SqliteNode::Error(_))) {
+        if !matches!(
+            self.ast_stack.pop(),
+            Some(CstNode {
+                data: CstNodeData::Error(_),
+                ..
+            })
+        ) {
             panic!("DEV ERROR: API Misuse")
         }
     }
@@ -430,7 +443,13 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(self.ast_stack.pop(), Some(SqliteNode::Error(_))) {
+        if !matches!(
+            self.ast_stack.pop(),
+            Some(CstNode {
+                data: CstNodeData::Error(_),
+                ..
+            })
+        ) {
             panic!("DEV ERROR: API Misuse")
         }
     }
@@ -447,8 +466,8 @@ impl<'a> UngramTraverser<'a> {
         self.ungram_stack.push(UngramNode::Rule(ungram_rule));
 
         match self.ast_stack.pop() {
-            Some(SqliteNode::Tree(tree_child)) => {
-                for child in tree_child.non_trivial_children(self.ast).rev() {
+            Some(node) if node.tree().is_some() => {
+                for child in node.non_trivial_children().rev() {
                     self.ast_stack.push(child);
                 }
             }
@@ -464,12 +483,27 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(self.ast_stack.pop(), Some(SqliteNode::Tree(_))) {
+        if !matches!(self.ast_stack.pop(), Some(node) if node.tree().is_some()) {
             panic!("DEV ERROR: API Misuse")
         }
     }
 
     pub fn is_traversal_complete(&self) -> bool {
         self.ast_stack.is_empty() && self.ungram_stack.is_empty()
+    }
+}
+
+pub fn rule_to_str(r: &Rule) -> String {
+    match r {
+        Rule::Labeled { label, rule } => format!("{label} : {}", rule_to_str(rule)),
+        Rule::Node(node) => format!("{}", UNGRAMMAR.get_node(*node).name),
+        Rule::Token(token) => format!("{}", UNGRAMMAR.get_token(*token)),
+        Rule::Seq(vec) => format!(
+            "[{}]",
+            vec.iter().map(rule_to_str).collect::<Vec<_>>().join(", ")
+        ),
+        Rule::Alt(vec) => vec.iter().map(rule_to_str).collect::<Vec<_>>().join(" | "),
+        Rule::Opt(rule) => format!("({})?", rule_to_str(rule)),
+        Rule::Rep(rule) => format!("({})*", rule_to_str(rule)),
     }
 }

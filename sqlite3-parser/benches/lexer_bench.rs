@@ -1,6 +1,6 @@
+use bord_sqlite3_parser::{SqliteLexer, SqliteVersion};
 use criterion::{criterion_group, criterion_main, Criterion};
 use sqlite3_parser::lexer::{sql::Tokenizer, Scanner};
-use bord_sqlite3_parser::{SqliteLexer, SqliteVersion};
 
 fn lexer_benchmark(c: &mut Criterion) {
     // Create a benchmark group

@@ -2,6 +2,7 @@
 //! resillient parsing [guide]((https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html))
 //! by matklad
 
+// mod cst;
 mod cst;
 mod cursor;
 mod grammar;
@@ -12,10 +13,7 @@ mod tree_kind;
 pub mod ungram;
 mod version;
 
-
-pub use cst::{
-    ChildNodeKey, NodeId, SqliteNode, SqliteToken, SqliteUntypedAst, TokenChild, TreeChild,
-};
+pub use cst::{ChildNodeKey, CstNode, CstNodeData, NodeId, SqliteToken, SqliteUntypedCst};
 
 use enumset::EnumSet;
 pub use token_kind::{sqlite_keywords, SqliteTokenKind, MAX_KEYWORD_LEN};
@@ -33,7 +31,7 @@ pub mod ast;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
-pub fn parse(text: &str) -> SqliteUntypedAst {
+pub fn parse(text: &str) -> SqliteUntypedCst {
     let (tokens, _) = SqliteLexer::new(text, SqliteVersion([3, 46, 0])).lex();
 
     let mut p = SqliteParser::new(tokens);
@@ -48,7 +46,7 @@ pub fn parse_any(
     text: &str,
     r: EnumSet<SqliteTokenKind>,
     parse_function: fn(&mut SqliteParser, EnumSet<SqliteTokenKind>),
-) -> SqliteUntypedAst {
+) -> SqliteUntypedCst {
     let (tokens, _) = SqliteLexer::new(text, SqliteVersion([3, 46, 0])).lex();
     let mut p = SqliteParser::new(tokens);
     parse_function(&mut p, r);

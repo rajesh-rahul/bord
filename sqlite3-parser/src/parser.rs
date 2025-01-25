@@ -3,11 +3,11 @@ use std::cell::Cell;
 use enumset::EnumSet;
 
 use crate::{
-    cst::SqliteUntypedAst,
+    cst::SqliteUntypedCst,
     grammar::common::{
         EXPR_BIND_PARAM_START, EXPR_LIT_START, EXPR_PREFIX_START, IDEN_SET, JOIN_KEYWORDS,
     },
-    SqliteNode, SqliteToken, SqliteTokenKind, SqliteTreeKind,
+    SqliteToken, SqliteTokenKind, SqliteTreeKind,
 };
 
 pub struct SqliteParser {
@@ -213,7 +213,7 @@ impl SqliteParser {
         self.close_err(m, (self.errors.len() - 1) as u16)
     }
 
-    pub(crate) fn build_tree<'a>(self) -> SqliteUntypedAst {
+    pub(crate) fn build_tree<'a>(self) -> SqliteUntypedCst {
         let mut all_tokens = self.all_tokens.into_iter();
         let mut events = self.events;
 
@@ -223,35 +223,33 @@ impl SqliteParser {
             panic!("Expected something in events");
         };
 
-        let mut ast = SqliteUntypedAst::new();
-        let mut curr_id = ast.next_idx();
-
-        ast.allocate(SqliteNode::new_tree_node(*kind, None, curr_id));
+        let mut cst = SqliteUntypedCst::new(*kind);
+        let mut curr = cst.root_mut();
 
         for event in &events[1..] {
             match event {
                 Event::Open { kind, .. } => {
-                    curr_id = curr_id.add_tree_child(&mut ast, *kind);
+                    curr = curr.push_tree(*kind);
                 }
                 Event::Error { error_idx } => {
-                    curr_id = curr_id.add_error_child(&mut ast, *error_idx);
+                    curr = curr.push_error(*error_idx as usize);
                 }
                 Event::Close { .. } => {
-                    curr_id = curr_id.as_node(&ast).parent().unwrap();
+                    curr = curr.parent_mut();
                 }
                 Event::Advance => {
                     let token = all_tokens.next().unwrap();
 
-                    curr_id.add_token_child(&mut ast, token);
+                    curr.push_token(token);
                 }
             }
         }
 
         assert!(all_tokens.next().is_none());
 
-        ast.add_errors(self.errors);
+        cst.add_errors(self.errors);
 
-        ast
+        cst
     }
 
     pub(crate) fn open(&mut self) -> MarkOpened {
