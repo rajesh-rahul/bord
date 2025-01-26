@@ -38,7 +38,7 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
                 }
                 Some(
                     node @ CstNode {
-                        data: CstNodeData::Error(err),
+                        data: CstNodeData::Error(_),
                         ..
                     },
                 ) if parse_err_corresponds_to_ungram_item(name, node.error().unwrap()) => {
@@ -76,7 +76,7 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
                 }
                 Some(
                     node @ CstNode {
-                        data: CstNodeData::Error(err),
+                        data: CstNodeData::Error(_),
                         ..
                     },
                 ) if parse_err_corresponds_to_ungram_item(name, node.error().unwrap()) => {
