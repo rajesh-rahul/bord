@@ -673,10 +673,6 @@ ExprInfix =
     | OpBetweenAnd | OpNotMatch | OpNotLike | OpNotRegexp | OpNotGlob | OpNotBetweenAnd
     | OpIsNotDistinctFrom | OpIsDistinctFrom | OpIsNot | OpIs | OpIn
 
-// TODO: SQLite spec actually allow an expr here but we will only support string literals for now
-OpLike = 
-    'KW_LIKE' Expr OpEscape?
-
 OpEscape =
     'KW_ESCAPE' escape: 'STR_LIT'
 
@@ -762,8 +758,11 @@ OpGlob =
 OpIs =
     lhs: Expr 'KW_IS' rhs: Expr
 
+OpLike = 
+    lhs: Expr 'KW_LIKE' rhs: Expr OpEscape?
+
 OpIn =
-    'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
+    lhs: Expr 'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
 
 OpNotIn =
     not: 'KW_NOT' 'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
