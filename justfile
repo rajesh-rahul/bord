@@ -1,7 +1,7 @@
 build:
-    cargo build --bin bord-server
-    mkdir -p ../bordsql-vscode/client/out
-    mv target/debug/bord-server ../bordsql-vscode/client/out/bord-server
+    cargo build --bin bord-cli
+    mkdir -p ../bord-vscode/client/out
+    mv target/debug/bord-cli ../bord-vscode/client/out/bord-cli
 
 gen_ast:
     cargo run --bin gen_ast > sqlite3-parser/src/ast/temporary_generated_file.rs
