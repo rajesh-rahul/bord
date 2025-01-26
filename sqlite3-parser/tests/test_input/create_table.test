@@ -111,3 +111,1249 @@ File {
     Error {
     }
 }
+%%
+CREATE TABLE actor (
+  actor_id numeric NOT NULL ,
+  first_name VARCHAR(45) NOT NULL,
+  last_name VARCHAR(45) NOT NULL,
+  last_update TIMESTAMP NOT NULL,
+  PRIMARY KEY  (actor_id)
+  )
+  ;
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "actor - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "actor_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "numeric - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "first_name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "45 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "45 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_update - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TIMESTAMP - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        TablePkConstraint {
+                            "PRIMARY"
+                            "KEY"
+                            IndexedColList {
+                                "("
+                                IndexedCol {
+                                    ColumnName {
+                                        "actor_id - IDEN"
+                                    }
+                                }
+                                ")"
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    ";"
+}
+%%
+CREATE TABLE city (
+  city_id int NOT NULL,
+  city VARCHAR(50) NOT NULL,
+  country_id SMALLINT NOT NULL,
+  last_update TIMESTAMP NOT ,
+  PRIMARY KEY  (city_id),
+  CONSTRAINT fk_city_country FOREIGN KEY (country_id) REFERENCES country (country_id) ON DELETE NO ACTION ON UPDATE CASCADE
+)
+;
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "city - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "city_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "int - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "city - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "50 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "country_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "SMALLINT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_update - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TIMESTAMP - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                Error {
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        TablePkConstraint {
+                            "PRIMARY"
+                            "KEY"
+                            IndexedColList {
+                                "("
+                                IndexedCol {
+                                    ColumnName {
+                                        "city_id - IDEN"
+                                    }
+                                }
+                                ")"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "fk_city_country - IDEN"
+                        }
+                        TableFkConstraint {
+                            "FOREIGN"
+                            "KEY"
+                            ColNameList {
+                                "("
+                                ColumnName {
+                                    "country_id - IDEN"
+                                }
+                                ")"
+                            }
+                            FkClause {
+                                "REFERENCES"
+                                TableName {
+                                    "country - IDEN"
+                                }
+                                ColNameList {
+                                    "("
+                                    ColumnName {
+                                        "country_id - IDEN"
+                                    }
+                                    ")"
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "DELETE"
+                                        FkNoAction {
+                                            "NO"
+                                            "ACTION"
+                                        }
+                                    }
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "UPDATE"
+                                        FkCascade {
+                                            "CASCADE"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    ";"
+}
+%%
+CREATE TABLE customer (
+  customer_id INT NOT NULL,
+  store_id INT NOT NULL,
+  first_name VARCHAR(45) NOT NULL,
+  last_name VARCHAR(45) NOT NULL,
+  email VARCHAR(50) DEFAULT NULL,
+  address_id INT NOT NULL,
+  active CHAR(1) DEFAULT 'Y' NOT NULL,
+  create_date TIMESTAMP NOT NULL,
+  last_update TIMESTAMP NOT NULL,
+  PRIMARY KEY  (customer_id),
+  CONSTRAINT fk_customer_store FOREIGN KEY (store_id) REFERENCES store () ON DELETE NO ACTION ON UPDATE CASCADE,
+  CONSTRAINT fk_customer_address FOREIGN KEY (address_id) REFERENCES address (address_id) ON DELETE NO ACTION ON UPDATE CASCADE
+)
+;
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "customer - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "customer_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "INT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "store_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "INT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "first_name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "45 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_name - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "45 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "email - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "50 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "address_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "INT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "active - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "CHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "1 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "'Y' - STR_LIT"
+                                }
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "create_date - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TIMESTAMP - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_update - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TIMESTAMP - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        TablePkConstraint {
+                            "PRIMARY"
+                            "KEY"
+                            IndexedColList {
+                                "("
+                                IndexedCol {
+                                    ColumnName {
+                                        "customer_id - IDEN"
+                                    }
+                                }
+                                ")"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "fk_customer_store - IDEN"
+                        }
+                        TableFkConstraint {
+                            "FOREIGN"
+                            "KEY"
+                            ColNameList {
+                                "("
+                                ColumnName {
+                                    "store_id - IDEN"
+                                }
+                                ")"
+                            }
+                            FkClause {
+                                "REFERENCES"
+                                TableName {
+                                    "store - IDEN"
+                                }
+                                ColNameList {
+                                    "("
+                                    Error {
+                                    }
+                                    ")"
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "DELETE"
+                                        FkNoAction {
+                                            "NO"
+                                            "ACTION"
+                                        }
+                                    }
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "UPDATE"
+                                        FkCascade {
+                                            "CASCADE"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "fk_customer_address - IDEN"
+                        }
+                        TableFkConstraint {
+                            "FOREIGN"
+                            "KEY"
+                            ColNameList {
+                                "("
+                                ColumnName {
+                                    "address_id - IDEN"
+                                }
+                                ")"
+                            }
+                            FkClause {
+                                "REFERENCES"
+                                TableName {
+                                    "address - IDEN"
+                                }
+                                ColNameList {
+                                    "("
+                                    ColumnName {
+                                        "address_id - IDEN"
+                                    }
+                                    ")"
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "DELETE"
+                                        FkNoAction {
+                                            "NO"
+                                            "ACTION"
+                                        }
+                                    }
+                                }
+                                FkViolateAction {
+                                    FkOnAction {
+                                        "ON"
+                                        "UPDATE"
+                                        FkCascade {
+                                            "CASCADE"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    ";"
+}
+%%
+CREATE TABLE film (
+  film_id int NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description BLOB SUB_TYPE TEXT DEFAULT NULL,
+  release_year VARCHAR(4) DEFAULT NULL,
+  language_id SMALLINT NOT NULL,
+  original_language_id SMALLINT DEFAULT NULL,
+  rental_duration SMALLINT  DEFAULT 3 NOT NULL,
+  rental_rate DECIMAL(4,2) DEFAULT 4.99 NOT NULL,
+  length SMALLINT DEFAULT NULL,
+  replacement_cost DECIMAL(5,2) DEFAULT 19.99 NOT NULL,
+  rating VARCHAR(10) DEFAULT 'G',
+  special_features VARCHAR(100) DEFAULT NULL,
+  last_update TIMESTAMP NOT NULL,
+  PRIMARY KEY  (film_id),
+  CONSTRAINT CHECK_special_features CHECK(special_features is null or
+                                                           special_features like '%Trailers%' or
+                                                           special_features like '%Commentaries%' or
+                                                           special_features like '%Deleted Scenes%' or
+                                                           special_features like '%Behind the Scenes%'),
+  CONSTRAINT CHECK_special_rating CHECK(rating in ('G','PG','PG-13','R','NC-17')),
+  CONSTRAINT fk_film_language FOREIGN KEY (language_id) REFERENCES language (language_id) ,
+  CONSTRAINT fk_film_language_original FOREIGN KEY (original_language_id) REFERENCES language (language_id)
+)
+;
+
+File {
+    Statement {
+        StatementNoCte {
+            CreateTableStmt {
+                "CREATE"
+                "TABLE"
+                FullTableName {
+                    TableName {
+                        "film - IDEN"
+                    }
+                }
+                TableDetails {
+                    "("
+                    ColumnDef {
+                        ColumnName {
+                            "film_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "int - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "title - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "255 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "description - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "BLOB - IDEN"
+                            }
+                            TypeNameWord {
+                                "SUB_TYPE - IDEN"
+                            }
+                            TypeNameWord {
+                                "TEXT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "release_year - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "4 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "language_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "SMALLINT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "original_language_id - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "SMALLINT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "rental_duration - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "SMALLINT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "3 - INT_LIT"
+                                }
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "rental_rate - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "DECIMAL - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "4 - INT_LIT"
+                            }
+                            ","
+                            SignedNumber {
+                                "2 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "4.99 - REAL_LIT"
+                                }
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "length - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "SMALLINT - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "replacement_cost - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "DECIMAL - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "5 - INT_LIT"
+                            }
+                            ","
+                            SignedNumber {
+                                "2 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "19.99 - REAL_LIT"
+                                }
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "rating - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "10 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "'G' - STR_LIT"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "special_features - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "VARCHAR - IDEN"
+                            }
+                            "("
+                            SignedNumber {
+                                "100 - INT_LIT"
+                            }
+                            ")"
+                        }
+                        ColumnConstraint {
+                            DefaultConstraint {
+                                "DEFAULT"
+                                DefaultConstraintLiteral {
+                                    "NULL"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    ColumnDef {
+                        ColumnName {
+                            "last_update - IDEN"
+                        }
+                        TypeName {
+                            TypeNameWord {
+                                "TIMESTAMP - IDEN"
+                            }
+                        }
+                        ColumnConstraint {
+                            NotNullConstraint {
+                                "NOT"
+                                "NULL"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        TablePkConstraint {
+                            "PRIMARY"
+                            "KEY"
+                            IndexedColList {
+                                "("
+                                IndexedCol {
+                                    ColumnName {
+                                        "film_id - IDEN"
+                                    }
+                                }
+                                ")"
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "CHECK_special_features - IDEN"
+                        }
+                        CheckConstraint {
+                            "CHECK"
+                            "("
+                            Expr {
+                                ExprInfix {
+                                    OpOr {
+                                        Expr {
+                                            ExprInfix {
+                                                OpOr {
+                                                    Expr {
+                                                        ExprInfix {
+                                                            OpOr {
+                                                                Expr {
+                                                                    ExprInfix {
+                                                                        OpOr {
+                                                                            Expr {
+                                                                                ExprInfix {
+                                                                                    OpIs {
+                                                                                        Expr {
+                                                                                            ExprColumnName {
+                                                                                                ColumnName {
+                                                                                                    "special_features - IDEN"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                        "IS"
+                                                                                        Expr {
+                                                                                            ExprLit {
+                                                                                                "NULL"
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            "OR"
+                                                                            Expr {
+                                                                                ExprInfix {
+                                                                                    OpLike {
+                                                                                        Expr {
+                                                                                            ExprColumnName {
+                                                                                                ColumnName {
+                                                                                                    "special_features - IDEN"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                        "LIKE"
+                                                                                        Expr {
+                                                                                            ExprLit {
+                                                                                                "'%Trailers%' - STR_LIT"
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                "OR"
+                                                                Expr {
+                                                                    ExprInfix {
+                                                                        OpLike {
+                                                                            Expr {
+                                                                                ExprColumnName {
+                                                                                    ColumnName {
+                                                                                        "special_features - IDEN"
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            "LIKE"
+                                                                            Expr {
+                                                                                ExprLit {
+                                                                                    "'%Commentaries%' - STR_LIT"
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    "OR"
+                                                    Expr {
+                                                        ExprInfix {
+                                                            OpLike {
+                                                                Expr {
+                                                                    ExprColumnName {
+                                                                        ColumnName {
+                                                                            "special_features - IDEN"
+                                                                        }
+                                                                    }
+                                                                }
+                                                                "LIKE"
+                                                                Expr {
+                                                                    ExprLit {
+                                                                        "'%Deleted Scenes%' - STR_LIT"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        "OR"
+                                        Expr {
+                                            ExprInfix {
+                                                OpLike {
+                                                    Expr {
+                                                        ExprColumnName {
+                                                            ColumnName {
+                                                                "special_features - IDEN"
+                                                            }
+                                                        }
+                                                    }
+                                                    "LIKE"
+                                                    Expr {
+                                                        ExprLit {
+                                                            "'%Behind the Scenes%' - STR_LIT"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ")"
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "CHECK_special_rating - IDEN"
+                        }
+                        CheckConstraint {
+                            "CHECK"
+                            "("
+                            Expr {
+                                ExprInfix {
+                                    OpIn {
+                                        Expr {
+                                            ExprColumnName {
+                                                ColumnName {
+                                                    "rating - IDEN"
+                                                }
+                                            }
+                                        }
+                                        "IN"
+                                        ExprList {
+                                            "("
+                                            Expr {
+                                                ExprLit {
+                                                    "'G' - STR_LIT"
+                                                }
+                                            }
+                                            ","
+                                            Expr {
+                                                ExprLit {
+                                                    "'PG' - STR_LIT"
+                                                }
+                                            }
+                                            ","
+                                            Expr {
+                                                ExprLit {
+                                                    "'PG-13' - STR_LIT"
+                                                }
+                                            }
+                                            ","
+                                            Expr {
+                                                ExprLit {
+                                                    "'R' - STR_LIT"
+                                                }
+                                            }
+                                            ","
+                                            Expr {
+                                                ExprLit {
+                                                    "'NC-17' - STR_LIT"
+                                                }
+                                            }
+                                            ")"
+                                        }
+                                    }
+                                }
+                            }
+                            ")"
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "fk_film_language - IDEN"
+                        }
+                        TableFkConstraint {
+                            "FOREIGN"
+                            "KEY"
+                            ColNameList {
+                                "("
+                                ColumnName {
+                                    "language_id - IDEN"
+                                }
+                                ")"
+                            }
+                            FkClause {
+                                "REFERENCES"
+                                TableName {
+                                    "language - IDEN"
+                                }
+                                ColNameList {
+                                    "("
+                                    ColumnName {
+                                        "language_id - IDEN"
+                                    }
+                                    ")"
+                                }
+                            }
+                        }
+                    }
+                    ","
+                    TableConstraint {
+                        "CONSTRAINT"
+                        ConstraintName {
+                            "fk_film_language_original - IDEN"
+                        }
+                        TableFkConstraint {
+                            "FOREIGN"
+                            "KEY"
+                            ColNameList {
+                                "("
+                                ColumnName {
+                                    "original_language_id - IDEN"
+                                }
+                                ")"
+                            }
+                            FkClause {
+                                "REFERENCES"
+                                TableName {
+                                    "language - IDEN"
+                                }
+                                ColNameList {
+                                    "("
+                                    ColumnName {
+                                        "language_id - IDEN"
+                                    }
+                                    ")"
+                                }
+                            }
+                        }
+                    }
+                    ")"
+                }
+            }
+        }
+    }
+    ";"
+}
