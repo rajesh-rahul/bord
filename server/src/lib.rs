@@ -5,17 +5,24 @@ mod from_lsp;
 mod text_document;
 mod vfs;
 
-// pub type Result<T> = anyhow::Result<T>;
+
+
+use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types as lsp;
+use tower_lsp::{Client, LanguageServer};
 
 #[derive(Debug)]
-struct BordLangServer {
+pub struct BordLangServer {
     client: Client,
     vfs: vfs::Vfs,
 }
 
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types as lsp;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+impl  BordLangServer {
+    pub fn new(client: Client) -> Self {
+        BordLangServer { client, vfs: Default::default() }
+    }
+}
+
 
 #[tower_lsp::async_trait]
 impl LanguageServer for BordLangServer {
@@ -93,20 +100,4 @@ impl LanguageServer for BordLangServer {
 
         Ok(Some(lsp::CompletionResponse::Array(completions)))
     }
-}
-
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .finish();
-
-    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
-
-    let (service, socket) = LspService::new(|client| BordLangServer {
-        client,
-        vfs: Default::default(),
-    });
-
-    Server::new(stdin, stdout, socket).serve(service).await;
 }

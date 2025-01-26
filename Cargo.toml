@@ -7,7 +7,8 @@ members = [
     "sqlite3-analyzer",
     "sqlite3-parser",
     "bord-zed",
-    "codegen",
+    "codegen", 
+    "bord-cli",
 ]
 
 resolver = "2"
@@ -23,6 +24,7 @@ thiserror = "1.0.63"
 text-size = "1.1.1"
 pretty_assertions =  "1.4.0"
 rstest = "0.24.0"
+tower-lsp = { features = ["tokio"], git = "https://github.com/rajesh-rahul/tower-lsp" }
 
 [profile.dev.package]
 insta.opt-level = 3

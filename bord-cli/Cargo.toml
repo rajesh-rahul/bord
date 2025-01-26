@@ -1,0 +1,11 @@
+[package]
+name = "bord-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bord-server = { path = "../server" }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"]}
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tower-lsp.workspace = true
