@@ -101,7 +101,7 @@ fn main() {
         "OpNotRegexp",
         "OpNotGlob",
         "OpIsNot",
-        "OpLike"
+        "OpLike",
     ]);
 
     for node_data in UNGRAMMAR.nodes() {
@@ -535,10 +535,13 @@ fn write_rust_code(
                 }
 
                 pub fn rhs_expr(&self) -> Option<Expr<'a>> {
-                    self.inner.valid_children()
-                        .skip_while(|it| it.tree() == Some(SqliteTreeKind::Expr))
-                        .find(|it| it.tree() == Some(SqliteTreeKind::Expr))
-                        .and_then(Expr::cast)
+                    let mut child_iter = self.inner.valid_children();
+
+                    // Navigate to operand, which will let us skip lhs expr
+                    child_iter.find(|it| it.tree() != Some(SqliteTreeKind::Expr));
+
+                    // Now navigate to navigate to next Expr node, which should be rhs
+                    child_iter.find_map(Expr::cast)
                 }
             }
         }
