@@ -24,7 +24,7 @@ fn parser_benchmark(c: &mut Criterion) {
                 let cmd = parser.next().unwrap();
 
                 if cmd.is_none() {
-                    break
+                    break;
                 }
             }
         })
@@ -65,12 +65,16 @@ fn basic_queries(c: &mut Criterion) {
         SELECT * FROM `table`
         LEFT JOIN derived USING (user_id);
     ";
-    group.bench_with_input("sqlite3_parser::with_select", &with_query.as_bytes(), |b, &s| {
-        b.iter(|| {
-            let mut parser = LemonParser::new(s);
-            assert!(parser.next().unwrap().unwrap().readonly())
-        });
-    });
+    group.bench_with_input(
+        "sqlite3_parser::with_select",
+        &with_query.as_bytes(),
+        |b, &s| {
+            b.iter(|| {
+                let mut parser = LemonParser::new(s);
+                assert!(parser.next().unwrap().unwrap().readonly())
+            });
+        },
+    );
 
     group.bench_with_input("bord_parser::with_select", &with_query, |b, &s| {
         b.iter(|| {

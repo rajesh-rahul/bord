@@ -54,7 +54,6 @@ pub fn parse_any(
     p.build_tree()
 }
 
-
 #[test]
 fn simple_parser_test() {
     let input = "WITH derived AS (
