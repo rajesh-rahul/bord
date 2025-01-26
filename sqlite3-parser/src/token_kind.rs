@@ -1,8 +1,5 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
-use std::sync::OnceLock;
-
-use ahash::AHashMap;
 use enumset::EnumSetType;
 
 pub const MAX_KEYWORD_LEN: usize = 17;
@@ -561,172 +558,165 @@ impl SqliteTokenKind {
     }
 }
 
-pub fn sqlite_keywords() -> &'static AHashMap<&'static [u8], SqliteTokenKind> {
-    static MAP: OnceLock<AHashMap<&'static [u8], SqliteTokenKind>> = OnceLock::new();
+// TODO: Slightly slower than Ahash. But why?
+static KEYWORDS: phf::Map<&'static [u8], SqliteTokenKind> = phf::phf_map! {
+    b"ABORT" => SqliteTokenKind::KW_ABORT,
+    b"ACTION" => SqliteTokenKind::KW_ACTION,
+    b"ADD" => SqliteTokenKind::KW_ADD,
+    b"AFTER" => SqliteTokenKind::KW_AFTER,
+    b"ALL" => SqliteTokenKind::KW_ALL,
+    b"ALTER" => SqliteTokenKind::KW_ALTER,
+    b"ALWAYS" => SqliteTokenKind::KW_ALWAYS,
+    b"ANALYZE" => SqliteTokenKind::KW_ANALYZE,
+    b"AND" => SqliteTokenKind::KW_AND,
+    b"AS" => SqliteTokenKind::KW_AS,
+    b"ASC" => SqliteTokenKind::KW_ASC,
+    b"ATTACH" => SqliteTokenKind::KW_ATTACH,
+    b"AUTOINCREMENT" =>SqliteTokenKind::KW_AUTOINCREMENT,
+    b"BEFORE" => SqliteTokenKind::KW_BEFORE,
+    b"BEGIN" => SqliteTokenKind::KW_BEGIN,
+    b"BETWEEN" => SqliteTokenKind::KW_BETWEEN,
+    b"BY" => SqliteTokenKind::KW_BY,
+    b"CASCADE" => SqliteTokenKind::KW_CASCADE,
+    b"CASE" => SqliteTokenKind::KW_CASE,
+    b"CAST" => SqliteTokenKind::KW_CAST,
+    b"CHECK" => SqliteTokenKind::KW_CHECK,
+    b"COLLATE" => SqliteTokenKind::KW_COLLATE,
+    b"COLUMN" => SqliteTokenKind::KW_COLUMN,
+    b"COMMIT" => SqliteTokenKind::KW_COMMIT,
+    b"CONFLICT" => SqliteTokenKind::KW_CONFLICT,
+    b"CONSTRAINT" => SqliteTokenKind::KW_CONSTRAINT,
+    b"CREATE" => SqliteTokenKind::KW_CREATE,
+    b"CROSS" => SqliteTokenKind::KW_CROSS,
+    b"CURRENT" => SqliteTokenKind::KW_CURRENT,
+    b"CURRENT_DATE" => SqliteTokenKind::KW_CURRENT_DATE,
+    b"CURRENT_TIME" => SqliteTokenKind::KW_CURRENT_TIME,
+    b"CURRENT_TIMESTAMP" => SqliteTokenKind::KW_CURRENT_TIMESTAMP,
+    b"DATABASE" => SqliteTokenKind::KW_DATABASE,
+    b"DEFAULT" => SqliteTokenKind::KW_DEFAULT,
+    b"DEFERRABLE" => SqliteTokenKind::KW_DEFERRABLE,
+    b"DEFERRED" => SqliteTokenKind::KW_DEFERRED,
+    b"DELETE" => SqliteTokenKind::KW_DELETE,
+    b"DESC" => SqliteTokenKind::KW_DESC,
+    b"DETACH" => SqliteTokenKind::KW_DETACH,
+    b"DISTINCT" => SqliteTokenKind::KW_DISTINCT,
+    b"DO" => SqliteTokenKind::KW_DO,
+    b"DROP" => SqliteTokenKind::KW_DROP,
+    b"EACH" => SqliteTokenKind::KW_EACH,
+    b"ELSE" => SqliteTokenKind::KW_ELSE,
+    b"END" => SqliteTokenKind::KW_END,
+    b"ESCAPE" => SqliteTokenKind::KW_ESCAPE,
+    b"EXCEPT" => SqliteTokenKind::KW_EXCEPT,
+    b"EXCLUDE" => SqliteTokenKind::KW_EXCLUDE,
+    b"EXCLUSIVE" => SqliteTokenKind::KW_EXCLUSIVE,
+    b"EXISTS" => SqliteTokenKind::KW_EXISTS,
+    b"EXPLAIN" => SqliteTokenKind::KW_EXPLAIN,
+    b"FAIL" => SqliteTokenKind::KW_FAIL,
+    b"FILTER" => SqliteTokenKind::KW_FILTER,
+    b"FIRST" => SqliteTokenKind::KW_FIRST,
+    b"FOLLOWING" => SqliteTokenKind::KW_FOLLOWING,
+    b"FOR" => SqliteTokenKind::KW_FOR,
+    b"FOREIGN" => SqliteTokenKind::KW_FOREIGN,
+    b"FROM" => SqliteTokenKind::KW_FROM,
+    b"FULL" => SqliteTokenKind::KW_FULL,
+    b"GENERATED" => SqliteTokenKind::KW_GENERATED,
+    b"GLOB" => SqliteTokenKind::KW_GLOB,
+    b"GROUP" => SqliteTokenKind::KW_GROUP,
+    b"GROUPS" => SqliteTokenKind::KW_GROUPS,
+    b"HAVING" => SqliteTokenKind::KW_HAVING,
+    b"IF" => SqliteTokenKind::KW_IF,
+    b"IGNORE" => SqliteTokenKind::KW_IGNORE,
+    b"IMMEDIATE" => SqliteTokenKind::KW_IMMEDIATE,
+    b"IN" => SqliteTokenKind::KW_IN,
+    b"INDEX" => SqliteTokenKind::KW_INDEX,
+    b"INDEXED" => SqliteTokenKind::KW_INDEXED,
+    b"INITIALLY" => SqliteTokenKind::KW_INITIALLY,
+    b"INNER" => SqliteTokenKind::KW_INNER,
+    b"INSERT" => SqliteTokenKind::KW_INSERT,
+    b"INSTEAD" => SqliteTokenKind::KW_INSTEAD,
+    b"INTERSECT" => SqliteTokenKind::KW_INTERSECT,
+    b"INTO" => SqliteTokenKind::KW_INTO,
+    b"IS" => SqliteTokenKind::KW_IS,
+    b"ISNULL" => SqliteTokenKind::KW_ISNULL,
+    b"JOIN" => SqliteTokenKind::KW_JOIN,
+    b"KEY" => SqliteTokenKind::KW_KEY,
+    b"LAST" => SqliteTokenKind::KW_LAST,
+    b"LEFT" => SqliteTokenKind::KW_LEFT,
+    b"LIKE" => SqliteTokenKind::KW_LIKE,
+    b"LIMIT" => SqliteTokenKind::KW_LIMIT,
+    b"MATCH" => SqliteTokenKind::KW_MATCH,
+    b"MATERIALIZED" => SqliteTokenKind::KW_MATERIALIZED,
+    b"NATURAL" => SqliteTokenKind::KW_NATURAL,
+    b"NO" => SqliteTokenKind::KW_NO,
+    b"NOT" => SqliteTokenKind::KW_NOT,
+    b"NOTHING" => SqliteTokenKind::KW_NOTHING,
+    b"NOTNULL" => SqliteTokenKind::KW_NOTNULL,
+    b"NULL" => SqliteTokenKind::KW_NULL,
+    b"NULLS" => SqliteTokenKind::KW_NULLS,
+    b"OF" => SqliteTokenKind::KW_OF,
+    b"OFFSET" => SqliteTokenKind::KW_OFFSET,
+    b"ON" => SqliteTokenKind::KW_ON,
+    b"OR" => SqliteTokenKind::KW_OR,
+    b"ORDER" => SqliteTokenKind::KW_ORDER,
+    b"OTHERS" => SqliteTokenKind::KW_OTHERS,
+    b"OUTER" => SqliteTokenKind::KW_OUTER,
+    b"OVER" => SqliteTokenKind::KW_OVER,
+    b"PARTITION" => SqliteTokenKind::KW_PARTITION,
+    b"PLAN" => SqliteTokenKind::KW_PLAN,
+    b"PRAGMA" => SqliteTokenKind::KW_PRAGMA,
+    b"PRECEDING" => SqliteTokenKind::KW_PRECEDING,
+    b"PRIMARY" => SqliteTokenKind::KW_PRIMARY,
+    b"QUERY" => SqliteTokenKind::KW_QUERY,
+    b"RAISE" => SqliteTokenKind::KW_RAISE,
+    b"RANGE" => SqliteTokenKind::KW_RANGE,
+    b"RECURSIVE" => SqliteTokenKind::KW_RECURSIVE,
+    b"REFERENCES" => SqliteTokenKind::KW_REFERENCES,
+    b"REGEXP" => SqliteTokenKind::KW_REGEXP,
+    b"REINDEX" => SqliteTokenKind::KW_REINDEX,
+    b"RELEASE" => SqliteTokenKind::KW_RELEASE,
+    b"RENAME" => SqliteTokenKind::KW_RENAME,
+    b"REPLACE" => SqliteTokenKind::KW_REPLACE,
+    b"RESTRICT" => SqliteTokenKind::KW_RESTRICT,
+    b"RETURNING" => SqliteTokenKind::KW_RETURNING,
+    b"RIGHT" => SqliteTokenKind::KW_RIGHT,
+    b"ROLLBACK" => SqliteTokenKind::KW_ROLLBACK,
+    b"ROW" => SqliteTokenKind::KW_ROW,
+    b"ROWS" => SqliteTokenKind::KW_ROWS,
+    b"SAVEPOINT" => SqliteTokenKind::KW_SAVEPOINT,
+    b"SELECT" => SqliteTokenKind::KW_SELECT,
+    b"SET" => SqliteTokenKind::KW_SET,
+    b"TABLE" => SqliteTokenKind::KW_TABLE,
+    b"TEMP" => SqliteTokenKind::KW_TEMP,
+    b"TEMPORARY" => SqliteTokenKind::KW_TEMPORARY,
+    b"THEN" => SqliteTokenKind::KW_THEN,
+    b"TIES" => SqliteTokenKind::KW_TIES,
+    b"TO" => SqliteTokenKind::KW_TO,
+    b"TRANSACTION" => SqliteTokenKind::KW_TRANSACTION,
+    b"TRIGGER" => SqliteTokenKind::KW_TRIGGER,
+    b"UNBOUNDED" => SqliteTokenKind::KW_UNBOUNDED,
+    b"UNION" => SqliteTokenKind::KW_UNION,
+    b"UNIQUE" => SqliteTokenKind::KW_UNIQUE,
+    b"UPDATE" => SqliteTokenKind::KW_UPDATE,
+    b"USING" => SqliteTokenKind::KW_USING,
+    b"VACUUM" => SqliteTokenKind::KW_VACUUM,
+    b"VALUES" => SqliteTokenKind::KW_VALUES,
+    b"VIEW" => SqliteTokenKind::KW_VIEW,
+    b"VIRTUAL" => SqliteTokenKind::KW_VIRTUAL,
+    b"WHEN" => SqliteTokenKind::KW_WHEN,
+    b"WHERE" => SqliteTokenKind::KW_WHERE,
+    b"WINDOW" => SqliteTokenKind::KW_WINDOW,
+    b"WITH" => SqliteTokenKind::KW_WITH,
+    b"WITHOUT" => SqliteTokenKind::KW_WITHOUT,
 
-    MAP.get_or_init(|| {
-        let mut map = AHashMap::new();
-        map.insert("ABORT".as_bytes(), SqliteTokenKind::KW_ABORT);
-        map.insert("ACTION".as_bytes(), SqliteTokenKind::KW_ACTION);
-        map.insert("ADD".as_bytes(), SqliteTokenKind::KW_ADD);
-        map.insert("AFTER".as_bytes(), SqliteTokenKind::KW_AFTER);
-        map.insert("ALL".as_bytes(), SqliteTokenKind::KW_ALL);
-        map.insert("ALTER".as_bytes(), SqliteTokenKind::KW_ALTER);
-        map.insert("ALWAYS".as_bytes(), SqliteTokenKind::KW_ALWAYS);
-        map.insert("ANALYZE".as_bytes(), SqliteTokenKind::KW_ANALYZE);
-        map.insert("AND".as_bytes(), SqliteTokenKind::KW_AND);
-        map.insert("AS".as_bytes(), SqliteTokenKind::KW_AS);
-        map.insert("ASC".as_bytes(), SqliteTokenKind::KW_ASC);
-        map.insert("ATTACH".as_bytes(), SqliteTokenKind::KW_ATTACH);
-        map.insert(
-            "AUTOINCREMENT".as_bytes(),
-            SqliteTokenKind::KW_AUTOINCREMENT,
-        );
-        map.insert("BEFORE".as_bytes(), SqliteTokenKind::KW_BEFORE);
-        map.insert("BEGIN".as_bytes(), SqliteTokenKind::KW_BEGIN);
-        map.insert("BETWEEN".as_bytes(), SqliteTokenKind::KW_BETWEEN);
-        map.insert("BY".as_bytes(), SqliteTokenKind::KW_BY);
-        map.insert("CASCADE".as_bytes(), SqliteTokenKind::KW_CASCADE);
-        map.insert("CASE".as_bytes(), SqliteTokenKind::KW_CASE);
-        map.insert("CAST".as_bytes(), SqliteTokenKind::KW_CAST);
-        map.insert("CHECK".as_bytes(), SqliteTokenKind::KW_CHECK);
-        map.insert("COLLATE".as_bytes(), SqliteTokenKind::KW_COLLATE);
-        map.insert("COLUMN".as_bytes(), SqliteTokenKind::KW_COLUMN);
-        map.insert("COMMIT".as_bytes(), SqliteTokenKind::KW_COMMIT);
-        map.insert("CONFLICT".as_bytes(), SqliteTokenKind::KW_CONFLICT);
-        map.insert("CONSTRAINT".as_bytes(), SqliteTokenKind::KW_CONSTRAINT);
-        map.insert("CREATE".as_bytes(), SqliteTokenKind::KW_CREATE);
-        map.insert("CROSS".as_bytes(), SqliteTokenKind::KW_CROSS);
-        map.insert("CURRENT".as_bytes(), SqliteTokenKind::KW_CURRENT);
-        map.insert("CURRENT_DATE".as_bytes(), SqliteTokenKind::KW_CURRENT_DATE);
-        map.insert("CURRENT_TIME".as_bytes(), SqliteTokenKind::KW_CURRENT_TIME);
-        map.insert(
-            "CURRENT_TIMESTAMP".as_bytes(),
-            SqliteTokenKind::KW_CURRENT_TIMESTAMP,
-        );
-        map.insert("DATABASE".as_bytes(), SqliteTokenKind::KW_DATABASE);
-        map.insert("DEFAULT".as_bytes(), SqliteTokenKind::KW_DEFAULT);
-        map.insert("DEFERRABLE".as_bytes(), SqliteTokenKind::KW_DEFERRABLE);
-        map.insert("DEFERRED".as_bytes(), SqliteTokenKind::KW_DEFERRED);
-        map.insert("DELETE".as_bytes(), SqliteTokenKind::KW_DELETE);
-        map.insert("DESC".as_bytes(), SqliteTokenKind::KW_DESC);
-        map.insert("DETACH".as_bytes(), SqliteTokenKind::KW_DETACH);
-        map.insert("DISTINCT".as_bytes(), SqliteTokenKind::KW_DISTINCT);
-        map.insert("DO".as_bytes(), SqliteTokenKind::KW_DO);
-        map.insert("DROP".as_bytes(), SqliteTokenKind::KW_DROP);
-        map.insert("EACH".as_bytes(), SqliteTokenKind::KW_EACH);
-        map.insert("ELSE".as_bytes(), SqliteTokenKind::KW_ELSE);
-        map.insert("END".as_bytes(), SqliteTokenKind::KW_END);
-        map.insert("ESCAPE".as_bytes(), SqliteTokenKind::KW_ESCAPE);
-        map.insert("EXCEPT".as_bytes(), SqliteTokenKind::KW_EXCEPT);
-        map.insert("EXCLUDE".as_bytes(), SqliteTokenKind::KW_EXCLUDE);
-        map.insert("EXCLUSIVE".as_bytes(), SqliteTokenKind::KW_EXCLUSIVE);
-        map.insert("EXISTS".as_bytes(), SqliteTokenKind::KW_EXISTS);
-        map.insert("EXPLAIN".as_bytes(), SqliteTokenKind::KW_EXPLAIN);
-        map.insert("FAIL".as_bytes(), SqliteTokenKind::KW_FAIL);
-        map.insert("FILTER".as_bytes(), SqliteTokenKind::KW_FILTER);
-        map.insert("FIRST".as_bytes(), SqliteTokenKind::KW_FIRST);
-        map.insert("FOLLOWING".as_bytes(), SqliteTokenKind::KW_FOLLOWING);
-        map.insert("FOR".as_bytes(), SqliteTokenKind::KW_FOR);
-        map.insert("FOREIGN".as_bytes(), SqliteTokenKind::KW_FOREIGN);
-        map.insert("FROM".as_bytes(), SqliteTokenKind::KW_FROM);
-        map.insert("FULL".as_bytes(), SqliteTokenKind::KW_FULL);
-        map.insert("GENERATED".as_bytes(), SqliteTokenKind::KW_GENERATED);
-        map.insert("GLOB".as_bytes(), SqliteTokenKind::KW_GLOB);
-        map.insert("GROUP".as_bytes(), SqliteTokenKind::KW_GROUP);
-        map.insert("GROUPS".as_bytes(), SqliteTokenKind::KW_GROUPS);
-        map.insert("HAVING".as_bytes(), SqliteTokenKind::KW_HAVING);
-        map.insert("IF".as_bytes(), SqliteTokenKind::KW_IF);
-        map.insert("IGNORE".as_bytes(), SqliteTokenKind::KW_IGNORE);
-        map.insert("IMMEDIATE".as_bytes(), SqliteTokenKind::KW_IMMEDIATE);
-        map.insert("IN".as_bytes(), SqliteTokenKind::KW_IN);
-        map.insert("INDEX".as_bytes(), SqliteTokenKind::KW_INDEX);
-        map.insert("INDEXED".as_bytes(), SqliteTokenKind::KW_INDEXED);
-        map.insert("INITIALLY".as_bytes(), SqliteTokenKind::KW_INITIALLY);
-        map.insert("INNER".as_bytes(), SqliteTokenKind::KW_INNER);
-        map.insert("INSERT".as_bytes(), SqliteTokenKind::KW_INSERT);
-        map.insert("INSTEAD".as_bytes(), SqliteTokenKind::KW_INSTEAD);
-        map.insert("INTERSECT".as_bytes(), SqliteTokenKind::KW_INTERSECT);
-        map.insert("INTO".as_bytes(), SqliteTokenKind::KW_INTO);
-        map.insert("IS".as_bytes(), SqliteTokenKind::KW_IS);
-        map.insert("ISNULL".as_bytes(), SqliteTokenKind::KW_ISNULL);
-        map.insert("JOIN".as_bytes(), SqliteTokenKind::KW_JOIN);
-        map.insert("KEY".as_bytes(), SqliteTokenKind::KW_KEY);
-        map.insert("LAST".as_bytes(), SqliteTokenKind::KW_LAST);
-        map.insert("LEFT".as_bytes(), SqliteTokenKind::KW_LEFT);
-        map.insert("LIKE".as_bytes(), SqliteTokenKind::KW_LIKE);
-        map.insert("LIMIT".as_bytes(), SqliteTokenKind::KW_LIMIT);
-        map.insert("MATCH".as_bytes(), SqliteTokenKind::KW_MATCH);
-        map.insert("MATERIALIZED".as_bytes(), SqliteTokenKind::KW_MATERIALIZED);
-        map.insert("NATURAL".as_bytes(), SqliteTokenKind::KW_NATURAL);
-        map.insert("NO".as_bytes(), SqliteTokenKind::KW_NO);
-        map.insert("NOT".as_bytes(), SqliteTokenKind::KW_NOT);
-        map.insert("NOTHING".as_bytes(), SqliteTokenKind::KW_NOTHING);
-        map.insert("NOTNULL".as_bytes(), SqliteTokenKind::KW_NOTNULL);
-        map.insert("NULL".as_bytes(), SqliteTokenKind::KW_NULL);
-        map.insert("NULLS".as_bytes(), SqliteTokenKind::KW_NULLS);
-        map.insert("OF".as_bytes(), SqliteTokenKind::KW_OF);
-        map.insert("OFFSET".as_bytes(), SqliteTokenKind::KW_OFFSET);
-        map.insert("ON".as_bytes(), SqliteTokenKind::KW_ON);
-        map.insert("OR".as_bytes(), SqliteTokenKind::KW_OR);
-        map.insert("ORDER".as_bytes(), SqliteTokenKind::KW_ORDER);
-        map.insert("OTHERS".as_bytes(), SqliteTokenKind::KW_OTHERS);
-        map.insert("OUTER".as_bytes(), SqliteTokenKind::KW_OUTER);
-        map.insert("OVER".as_bytes(), SqliteTokenKind::KW_OVER);
-        map.insert("PARTITION".as_bytes(), SqliteTokenKind::KW_PARTITION);
-        map.insert("PLAN".as_bytes(), SqliteTokenKind::KW_PLAN);
-        map.insert("PRAGMA".as_bytes(), SqliteTokenKind::KW_PRAGMA);
-        map.insert("PRECEDING".as_bytes(), SqliteTokenKind::KW_PRECEDING);
-        map.insert("PRIMARY".as_bytes(), SqliteTokenKind::KW_PRIMARY);
-        map.insert("QUERY".as_bytes(), SqliteTokenKind::KW_QUERY);
-        map.insert("RAISE".as_bytes(), SqliteTokenKind::KW_RAISE);
-        map.insert("RANGE".as_bytes(), SqliteTokenKind::KW_RANGE);
-        map.insert("RECURSIVE".as_bytes(), SqliteTokenKind::KW_RECURSIVE);
-        map.insert("REFERENCES".as_bytes(), SqliteTokenKind::KW_REFERENCES);
-        map.insert("REGEXP".as_bytes(), SqliteTokenKind::KW_REGEXP);
-        map.insert("REINDEX".as_bytes(), SqliteTokenKind::KW_REINDEX);
-        map.insert("RELEASE".as_bytes(), SqliteTokenKind::KW_RELEASE);
-        map.insert("RENAME".as_bytes(), SqliteTokenKind::KW_RENAME);
-        map.insert("REPLACE".as_bytes(), SqliteTokenKind::KW_REPLACE);
-        map.insert("RESTRICT".as_bytes(), SqliteTokenKind::KW_RESTRICT);
-        map.insert("RETURNING".as_bytes(), SqliteTokenKind::KW_RETURNING);
-        map.insert("RIGHT".as_bytes(), SqliteTokenKind::KW_RIGHT);
-        map.insert("ROLLBACK".as_bytes(), SqliteTokenKind::KW_ROLLBACK);
-        map.insert("ROW".as_bytes(), SqliteTokenKind::KW_ROW);
-        map.insert("ROWS".as_bytes(), SqliteTokenKind::KW_ROWS);
-        map.insert("SAVEPOINT".as_bytes(), SqliteTokenKind::KW_SAVEPOINT);
-        map.insert("SELECT".as_bytes(), SqliteTokenKind::KW_SELECT);
-        map.insert("SET".as_bytes(), SqliteTokenKind::KW_SET);
-        map.insert("TABLE".as_bytes(), SqliteTokenKind::KW_TABLE);
-        map.insert("TEMP".as_bytes(), SqliteTokenKind::KW_TEMP);
-        map.insert("TEMPORARY".as_bytes(), SqliteTokenKind::KW_TEMPORARY);
-        map.insert("THEN".as_bytes(), SqliteTokenKind::KW_THEN);
-        map.insert("TIES".as_bytes(), SqliteTokenKind::KW_TIES);
-        map.insert("TO".as_bytes(), SqliteTokenKind::KW_TO);
-        map.insert("TRANSACTION".as_bytes(), SqliteTokenKind::KW_TRANSACTION);
-        map.insert("TRIGGER".as_bytes(), SqliteTokenKind::KW_TRIGGER);
-        map.insert("UNBOUNDED".as_bytes(), SqliteTokenKind::KW_UNBOUNDED);
-        map.insert("UNION".as_bytes(), SqliteTokenKind::KW_UNION);
-        map.insert("UNIQUE".as_bytes(), SqliteTokenKind::KW_UNIQUE);
-        map.insert("UPDATE".as_bytes(), SqliteTokenKind::KW_UPDATE);
-        map.insert("USING".as_bytes(), SqliteTokenKind::KW_USING);
-        map.insert("VACUUM".as_bytes(), SqliteTokenKind::KW_VACUUM);
-        map.insert("VALUES".as_bytes(), SqliteTokenKind::KW_VALUES);
-        map.insert("VIEW".as_bytes(), SqliteTokenKind::KW_VIEW);
-        map.insert("VIRTUAL".as_bytes(), SqliteTokenKind::KW_VIRTUAL);
-        map.insert("WHEN".as_bytes(), SqliteTokenKind::KW_WHEN);
-        map.insert("WHERE".as_bytes(), SqliteTokenKind::KW_WHERE);
-        map.insert("WINDOW".as_bytes(), SqliteTokenKind::KW_WINDOW);
-        map.insert("WITH".as_bytes(), SqliteTokenKind::KW_WITH);
-        map.insert("WITHOUT".as_bytes(), SqliteTokenKind::KW_WITHOUT);
+    // These doesn't seem to be keywords but we will treat them as such
+    b"TRUE" => SqliteTokenKind::KW_TRUE,
+    b"FALSE" => SqliteTokenKind::KW_FALSE,
+    b"STORED" => SqliteTokenKind::KW_STORED,
+    b"STRICT" => SqliteTokenKind::KW_STRICT,
+    b"ROWID" => SqliteTokenKind::KW_ROWID,
+};
 
-        // These doesn't seem to be keywords but we will treat them as such
-        map.insert("TRUE".as_bytes(), SqliteTokenKind::KW_TRUE);
-        map.insert("FALSE".as_bytes(), SqliteTokenKind::KW_FALSE);
-        map.insert("STORED".as_bytes(), SqliteTokenKind::KW_STORED);
-        map.insert("STRICT".as_bytes(), SqliteTokenKind::KW_STRICT);
-        map.insert("ROWID".as_bytes(), SqliteTokenKind::KW_ROWID);
 
-        map
-    })
+pub fn sqlite_keywords(keyword: &[u8]) -> Option<SqliteTokenKind> {
+    KEYWORDS.get(keyword).cloned()
 }

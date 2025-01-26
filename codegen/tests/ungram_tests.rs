@@ -6,11 +6,11 @@ fn test_ungram_keywords_are_correct() {
     for token_data in UNGRAMMAR.tokens() {
         if token_data.name.starts_with("KW_") {
             let keyword = token_data.name.trim_start_matches("KW_");
-            if sqlite_keywords().get(keyword.as_bytes()).is_none() {
+            if sqlite_keywords(keyword.as_bytes()).is_none() {
                 panic!("{} is not a keyword", token_data.name)
             }
         } else {
-            if sqlite_keywords().get(token_data.name.as_bytes()).is_some() {
+            if sqlite_keywords(token_data.name.as_bytes()).is_some() {
                 panic!("{} is a keyword", token_data.name)
             }
         }
@@ -38,5 +38,6 @@ fn test_tree_kinds_are_correct() {
         }
     };
 
+    println!("{}", prettyplease::unparse(&syn::parse_file(&expected.to_string()).unwrap()));
     assert!(actual == syn::parse_file(&expected.to_string()).unwrap());
 }

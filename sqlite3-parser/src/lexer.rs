@@ -193,9 +193,9 @@ impl<'input> SqliteLexer<'input> {
                 return None;
             }
 
-            if let Some(keyword) = sqlite_keywords().get(&word[0..word_len]) {
+            if let Some(keyword) = sqlite_keywords(&word[0..word_len]) {
                 lexer.cursor.advance_by(word_len);
-                Some(lexer.build_token(*keyword))
+                Some(lexer.build_token(keyword))
             } else {
                 None
             }
