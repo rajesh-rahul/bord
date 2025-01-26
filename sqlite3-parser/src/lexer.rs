@@ -76,7 +76,7 @@ impl<'input> SqliteLexer<'input> {
 
         match token {
             (c, ..) if c.is_whitespace() => self.process_whitespace(),
-            ('"', ..) | ('`', ..) => self.process_quoted_identifier(),
+            ('"', ..) | ('`', ..) | ('[', ..) => self.process_quoted_identifier(),
             ('-', Some('>'), Some('>')) => build_token(EXTRACT_TWO),
             ('-', Some('>'), ..) => build_token(EXTRACT_ONE),
             ('|', Some('|'), ..) => build_token(DOUBLE_PIPE),
@@ -255,11 +255,18 @@ impl<'input> SqliteLexer<'input> {
     }
 
     fn process_quoted_identifier(&mut self) -> SqliteToken {
-        debug_assert!(matches!(self.cursor.first(), Some('"') | Some('`')));
-        
-        let termination_ch = self.cursor.first().unwrap();
+        debug_assert!(matches!(
+            self.cursor.first(),
+            Some('"') | Some('`') | Some('[')
+        ));
+
+        let termination_ch = match self.cursor.first().unwrap() {
+            '[' => ']',
+            ch => ch,
+        };
+
         self.cursor.advance_by(1);
-        
+
         let mut is_terminated = false;
 
         while let Some(ch) = self.cursor.next() {
@@ -562,5 +569,13 @@ fn can_lex_keywords() {
             WHITESPACE,
             KW_CURRENT_TIMESTAMP
         ]
+    );
+}
+
+#[test]
+fn can_lex_identifiers() {
+    check!(
+        "users 'users' \"users\" [users] `users`",
+        [IDEN, WHITESPACE, STR_LIT, WHITESPACE, IDEN, WHITESPACE, IDEN, WHITESPACE, IDEN]
     );
 }
