@@ -38,6 +38,9 @@ fn test_tree_kinds_are_correct() {
         }
     };
 
-    println!("{}", prettyplease::unparse(&syn::parse_file(&expected.to_string()).unwrap()));
+    println!(
+        "{}",
+        prettyplease::unparse(&syn::parse_file(&expected.to_string()).unwrap())
+    );
     assert!(actual == syn::parse_file(&expected.to_string()).unwrap());
 }

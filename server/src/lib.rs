@@ -5,8 +5,6 @@ mod from_lsp;
 mod text_document;
 mod vfs;
 
-
-
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types as lsp;
 use tower_lsp::{Client, LanguageServer};
@@ -17,12 +15,14 @@ pub struct BordLangServer {
     vfs: vfs::Vfs,
 }
 
-impl  BordLangServer {
+impl BordLangServer {
     pub fn new(client: Client) -> Self {
-        BordLangServer { client, vfs: Default::default() }
+        BordLangServer {
+            client,
+            vfs: Default::default(),
+        }
     }
 }
-
 
 #[tower_lsp::async_trait]
 impl LanguageServer for BordLangServer {

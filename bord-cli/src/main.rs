@@ -1,7 +1,6 @@
 use bord_server::BordLangServer;
 use tower_lsp::{LspService, Server};
 
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -10,7 +9,7 @@ async fn main() {
 
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
 
-    let (service, socket) =  LspService::new(|client| BordLangServer::new(client));
+    let (service, socket) = LspService::new(|client| BordLangServer::new(client));
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
