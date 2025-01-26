@@ -857,7 +857,7 @@ pub fn trigger_body_stmt(p: &mut SqliteParser, r: TokenSet) {
         insert_stmt(p, r);
     } else if p.at(KW_DELETE) {
         delete_stmt(p, r);
-    } else if p.at_any(KW_SELECT | KW_VALUES) {
+    } else if p.at_any(SELECT_STMT_START) {
         select_stmt(p, r);
     } else {
         unreachable!("DEV ERROR: TRIGGER_BODY_STMT_START is wrong");
@@ -872,7 +872,8 @@ pub fn trigger_body_stmt_list(p: &mut SqliteParser, r: TokenSet) {
     let m = p.open();
 
     trigger_body_stmt(p, r);
-    while p.eat(T![;]) {
+    while p.at(T![;]) && TRIGGER_BODY_STMT_START.contains(p.nth(1)) {
+        p.guaranteed(T![;]);
         trigger_body_stmt(p, r);
     }
     p.must_eat(T![;], r);
@@ -2972,7 +2973,7 @@ pub fn table_details(p: &mut SqliteParser, r: TokenSet) {
     column_def(p, r);
     while p.eat(T![,]) {
         if p.at_any(TABLE_CONSTRAINT_START) {
-            break
+            break;
         } else {
             column_def(p, r);
         }
