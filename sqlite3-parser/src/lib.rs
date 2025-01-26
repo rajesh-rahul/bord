@@ -53,3 +53,22 @@ pub fn parse_any(
 
     p.build_tree()
 }
+
+
+#[test]
+fn simple_parser_test() {
+    let input = "WITH derived AS (
+            SELECT MAX(a) AS max_a,
+                   COUNT(b) AS b_num,
+                   user_id
+            FROM `TABLE`
+            GROUP BY user_id
+        )
+        SELECT * FROM `table`
+        LEFT JOIN derived USING (user_id);";
+
+    let cst = parse(input);
+
+    println!("{cst}");
+    assert!(cst.errors().is_empty());
+}
