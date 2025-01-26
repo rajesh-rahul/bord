@@ -41,7 +41,7 @@ pub struct SqliteUntypedCst {
     pub(crate) data: Vec<CstNodeData>,
     // pub(crate) level: Vec<usize>,
     pub(crate) parent: Vec<usize>,
-    pub(crate) children: Vec<Vec<usize>>, // Inner vec should be optimized
+    pub(crate) children: Vec<tinyvec::TinyVec<[usize; 4]>>, // Inner vec should be optimized
     pub(crate) errors: Vec<SqliteParseError>,
 }
 
@@ -95,7 +95,7 @@ impl SqliteUntypedCst {
         self.data.push(data);
         // self.level.push(level);
         self.parent.push(parent_idx);
-        self.children.push(Vec::new());
+        self.children.push(Default::default());
 
         let new_node_idx = self.data.len() - 1;
 
