@@ -223,7 +223,7 @@ impl SqliteParser {
             panic!("Expected something in events");
         };
 
-        let mut cst = SqliteUntypedCst::new(*kind);
+        let mut cst = SqliteUntypedCst::with_capacity(*kind, events.iter().filter(|it| !matches!(it, Event::Close)).count());
         let mut curr = cst.root_mut();
 
         for event in &events[1..] {
