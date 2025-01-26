@@ -112,10 +112,7 @@ pub enum UngramTraverserBacktrackResult {
 }
 
 impl<'a> UngramTraverser<'a> {
-    pub fn new(
-        ast_root: CstNode<'a>,
-        ungram_root: &'static Rule,
-    ) -> Self {
+    pub fn new(ast_root: CstNode<'a>, ungram_root: &'static Rule) -> Self {
         let ast_stack = vec![ast_root];
         let ungram_stack = vec![UngramNode::Rule(ungram_root)];
         Self {
