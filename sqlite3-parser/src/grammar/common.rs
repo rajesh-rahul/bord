@@ -84,6 +84,14 @@ pub(crate) const IDEN_SET: EnumSet<SqliteTokenKind> = enum_set!(
         | KW_CURRENT_DATE
         | KW_CURRENT_TIME
         | KW_IF
+
+        // The following are not keywords and just regular words in SQLite, but to make parsing
+        // easier we considered them keywords and therefore we must add them to this set here
+        | KW_TRUE
+        | KW_FALSE
+        | KW_STORED
+        | KW_ROWID
+        | KW_STRICT
 );
 
 pub(crate) const JOIN_KEYWORDS: EnumSet<SqliteTokenKind> =
