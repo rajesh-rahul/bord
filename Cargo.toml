@@ -4,7 +4,6 @@ members = [
     "bord",
     "macros",
     "server",
-    "schema-engine",
     "sqlite3-analyzer",
     "sqlite3-parser",
     "bord-zed",
