@@ -2971,7 +2971,11 @@ pub fn table_details(p: &mut SqliteParser, r: TokenSet) {
 
     column_def(p, r);
     while p.eat(T![,]) {
-        column_def(p, r);
+        if p.at_any(TABLE_CONSTRAINT_START) {
+            break
+        } else {
+            column_def(p, r);
+        }
     }
 
     if p.at_any(TABLE_CONSTRAINT_START) {
