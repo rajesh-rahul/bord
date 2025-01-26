@@ -101,6 +101,7 @@ fn main() {
         "OpNotRegexp",
         "OpNotGlob",
         "OpIsNot",
+        "OpLike"
     ]);
 
     for node_data in UNGRAMMAR.nodes() {
@@ -330,6 +331,34 @@ fn write_rust_code(
             }
         });
 
+        let field_method_snippet = it.fields.iter().map(|field| {
+            let variant_name = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name));
+            let variant_name_lower = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name).to_case(Case::Snake));
+
+            match field.kind {
+                RustEnumFieldKind::Node => {
+                    quote! {
+                        pub fn #variant_name_lower(self) -> Option<#variant_name<'a>> {
+                            match self {
+                                Self::#variant_name(item) => Some(item),
+                                _ => None
+                            }
+                        }
+                    }
+                },
+                RustEnumFieldKind::Token => {
+                    quote! {
+                        pub fn #variant_name_lower(self) -> Option<&'a SqliteToken> {
+                            match self {
+                                Self::#variant_name(item) => Some(item),
+                                _ => None
+                            }
+                        }
+                    }
+                },
+            }
+        });
+
         if it.is_non_terminal_node {
             quote! {
                 pub enum #enum_name<'a> {
@@ -349,6 +378,8 @@ fn write_rust_code(
                             _ => return None
                         }).next()
                     }
+
+                    #(#field_method_snippet)*
                 }
             }
         } else {
@@ -366,6 +397,8 @@ fn write_rust_code(
                             _ => return None
                         }
                     }
+
+                    #(#field_method_snippet)*
                 }
             }
         }
@@ -465,19 +498,13 @@ fn write_rust_code(
             }
         });
 
-        let inner_variable_name = if it.methods.len() > 0 {
-            format_ident!("inner")
-        } else {
-            format_ident!("_inner")
-        };
-
         quote! {
-            pub struct #struct_name<'a> { #inner_variable_name: CstNode<'a> }
+            pub struct #struct_name<'a> { pub inner: CstNode<'a> }
 
             impl<'a> #struct_name<'a> {
                 pub fn cast(node: CstNode<'a>) -> Option<Self> {
                     if node.tree() == Some(SqliteTreeKind::#struct_name) {
-                        Some(Self{ #inner_variable_name: node })
+                        Some(Self{ inner: node })
                     } else {
                         None
                     }
@@ -497,7 +524,7 @@ fn write_rust_code(
             impl<'a> #struct_name<'a> {
                 pub fn cast(node: CstNode<'a>) -> Option<Self> {
                     if node.tree() == Some(SqliteTreeKind::#struct_name) {
-                        Some(Self{inner: node })
+                        Some(Self{ inner: node })
                     } else {
                         None
                     }
