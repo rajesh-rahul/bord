@@ -76,7 +76,7 @@ impl<'input> SqliteLexer<'input> {
 
         match token {
             (c, ..) if c.is_whitespace() => self.process_whitespace(),
-            ('"', ..) => self.process_quoted_identifier(),
+            ('"', ..) | ('`', ..) => self.process_quoted_identifier(),
             ('-', Some('>'), Some('>')) => build_token(EXTRACT_TWO),
             ('-', Some('>'), ..) => build_token(EXTRACT_ONE),
             ('|', Some('|'), ..) => build_token(DOUBLE_PIPE),
@@ -255,13 +255,15 @@ impl<'input> SqliteLexer<'input> {
     }
 
     fn process_quoted_identifier(&mut self) -> SqliteToken {
-        debug_assert!(self.cursor.first() == Some('"'));
+        debug_assert!(matches!(self.cursor.first(), Some('"') | Some('`')));
+        
+        let termination_ch = self.cursor.first().unwrap();
         self.cursor.advance_by(1);
-
+        
         let mut is_terminated = false;
 
         while let Some(ch) = self.cursor.next() {
-            if ch == '"' {
+            if ch == termination_ch {
                 is_terminated = true;
                 break;
             }
