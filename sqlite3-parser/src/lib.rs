@@ -68,6 +68,12 @@ fn simple_parser_test() {
 
     let cst = parse(input);
 
-    println!("{cst}");
+    let clause = cst
+        .root()
+        .descendants()
+        .find(|it| it.tree() == Some(SqliteTreeKind::CteClause))
+        .unwrap();
+
+    println!("{}`", clause.to_string());
     assert!(cst.errors().is_empty());
 }

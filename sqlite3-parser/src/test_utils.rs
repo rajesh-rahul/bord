@@ -175,7 +175,7 @@ fn parse_err_corresponds_to_ungram_item(ungram_item: &str, err: &SqliteParseErro
                 tk_kind.as_str() == ungram_item.trim_start_matches("KW_")
                     || fat_ungram_tokens_match_ast(ungram_item, *tk_kind)
             }
-            ExpectedItem::Tree(tree_kind) => ungram_item == Into::<&str>::into(tree_kind),
+            ExpectedItem::Tree(tree_kind) => ungram_item == tree_kind.as_str(),
         }),
         ParseErrorKind::UnknownTokens => false,
         ParseErrorKind::OtherError(_) => false,

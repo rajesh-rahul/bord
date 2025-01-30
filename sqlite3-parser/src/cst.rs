@@ -41,7 +41,7 @@ pub struct SqliteUntypedCst {
     pub(crate) data: Vec<CstNodeData>,
     // pub(crate) level: Vec<usize>,
     pub(crate) parent: Vec<usize>,
-    pub(crate) children: Vec<tinyvec::TinyVec<[usize; 4]>>, // Inner vec should be optimized
+    pub(crate) children: Vec<tinyvec::TinyVec<[usize; 4]>>,
     pub(crate) errors: Vec<SqliteParseError>,
 }
 
@@ -154,6 +154,12 @@ impl SqliteUntypedCst {
 
         self.node_mut(NodeId::from_index(0))
     }
+
+    pub fn statements(&self) -> impl Iterator<Item = CstNode<'_>> {
+        self.root()
+            .children()
+            .filter(|it| it.tree() == Some(SqliteTreeKind::Statement))
+    }
 }
 
 impl<'a> CstMut<'a> {
@@ -265,17 +271,38 @@ impl<'a> CstNode<'a> {
     }
 
     // Iterate over earlier siblings (In insertion order)
+    /// Panics if node is root
     pub fn left_siblings(&self) -> impl Iterator<Item = CstNode<'a>> + '_ {
         self.parent().children().take_while(|it| it.id != self.id)
     }
 
     // Iterate over later siblings (In insertion order)
+    /// Panics if node is root
     pub fn right_siblings(&self) -> impl Iterator<Item = CstNode<'a>> + '_ {
         // Run the iterator until we find ourselves
         let mut iter = self.parent().children();
         iter.find(|it| it.id == self.id).unwrap();
 
         iter
+    }
+
+    pub fn has_errors(&self) -> bool {
+        // End search at the end of the array or at the node immediately to the left of
+        // our first right sibling(if we have one)
+        let search_end_idx = if self.is_root() {
+            self.cst.data.len() - 1
+        } else {
+            self.right_siblings()
+                .next()
+                .map(|it| it.id.to_index() - 1)
+                .unwrap_or(self.cst.data.len() - 1)
+        };
+
+        let search_start_idx = self.id.to_index();
+
+        self.cst.data[search_start_idx..=search_end_idx]
+            .iter()
+            .any(|it| matches!(it, CstNodeData::Error(_)))
     }
 
     // Iterate over siblings (In insertion order), skipping ourselves
@@ -290,17 +317,30 @@ impl<'a> CstNode<'a> {
     pub fn descendants<'b>(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
         let mut curr = *self;
 
-        let mut youngest_descendant = self.id.to_index();
+        let mut last_non_triv_desc = self.id.to_index();
         while let Some(descendant) = curr.last_non_trivial_child_idx() {
-            youngest_descendant = descendant;
+            last_non_triv_desc = descendant;
             curr = self.cst.node(NodeId::from_index(descendant));
         }
 
         let start = self.id.to_index() + 1;
-        let end = youngest_descendant;
+        let end = last_non_triv_desc;
 
         // NOTE: if start is greater than end, we will get an empty iterator
         (start..=end).map(|it| self.cst.node(NodeId::from_index(it)))
+    }
+
+    // If this node has no descendants, return index of this node
+    // TODO: Can be optimized look at start_pos/end_pos
+    fn last_descendant_idx(&self) -> usize {
+        let mut last_descendant = self.id.to_index();
+
+        while !self.cst.children[last_descendant].is_empty() {
+            let children = &self.cst.children[last_descendant];
+            last_descendant = children[children.len() - 1] // safe because children not empty
+        }
+
+        last_descendant
     }
 
     fn last_non_trivial_child_idx(&self) -> Option<usize> {
@@ -317,6 +357,91 @@ impl<'a> CstNode<'a> {
         self.token().is_some_and(|it| it.is_trivia())
     }
 
+    pub fn start_pos(&self) -> Option<u32> {
+        self.start_pos_configurable(true)
+    }
+
+    pub fn start_pos_skip_trivia(&self) -> Option<u32> {
+        self.start_pos_configurable(false)
+    }
+
+    pub fn end_pos(&self) -> Option<u32> {
+        self.end_pos_configurable(true)
+    }
+
+    pub fn end_pos_skip_trivia(&self) -> Option<u32> {
+        self.end_pos_configurable(false)
+    }
+
+    /// Use `allow_trivial` to include trivial tokens such as whitespace in end_pos calculation.
+    ///
+    /// This may not be desired in cases such as when we need to show error squiggly lines
+    /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
+    // NOTE: We can also implement this by recursively calling start_pos on the first child
+    // until we find a token node - but this gotta be faster
+    fn start_pos_configurable(&self, allow_trivial: bool) -> Option<u32> {
+        // End search at the end of the array or at the node immediately to the left of
+        // our first right sibling(if we have one)
+        let search_end_idx = if self.is_root() {
+            self.cst.data.len() - 1
+        } else {
+            self.right_siblings()
+                .next()
+                .map(|it| it.id.to_index() - 1)
+                .unwrap_or(self.cst.data.len() - 1)
+        };
+
+        let search_start_idx = self.id.to_index(); // Start search from this node
+
+        // Don't skip ourselves. Because if we are a token node, then we are what we are looking for
+        for node_data in &self.cst.data[search_start_idx..=search_end_idx] {
+            match node_data {
+                CstNodeData::Token(tk) if allow_trivial => return Some(tk.start()),
+                CstNodeData::Token(tk) if !allow_trivial && !tk.is_trivia() => {
+                    return Some(tk.start())
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    /// Use `allow_trivial` to include trivial tokens such as whitespace in end_pos calculation.
+    ///
+    /// This may not be desired in cases such as when we need to show error squiggly lines
+    /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
+    fn end_pos_configurable(&self, allow_trivial: bool) -> Option<u32> {
+        // Start search from the end of the array or from the node immediately to the left of
+        // our first right sibling(if we have one)
+        let search_start_idx = if self.is_root() {
+            self.cst.data.len() - 1
+        } else {
+            self.right_siblings()
+                .next()
+                .map(|it| it.id.to_index() - 1)
+                .unwrap_or(self.cst.data.len() - 1)
+        };
+
+        let search_end_idx = self.id.to_index(); // End search when we reach this node(inclusive)
+
+        // Don't skip ourselves. Because if we are a token node, then we are what we are looking for
+        for node_data in self.cst.data[search_end_idx..=search_start_idx]
+            .iter()
+            .rev()
+        {
+            match node_data {
+                CstNodeData::Token(tk) if allow_trivial => return Some(tk.end()),
+                CstNodeData::Token(tk) if !allow_trivial && !tk.is_trivia() => {
+                    return Some(tk.end())
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
     pub fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.print(f, self.id)?;
 
@@ -329,10 +454,25 @@ impl<'a> CstNode<'a> {
 
     pub fn as_str(&self) -> &'static str {
         match self.data {
-            CstNodeData::Tree(tree_kind) => tree_kind.into(),
+            CstNodeData::Tree(tree_kind) => tree_kind.as_str(),
             CstNodeData::Token(tk) => tk.kind.as_str(),
             CstNodeData::Error(_) => "Error",
         }
+    }
+
+    pub fn to_string(&self) -> String {
+        let start = self.id.to_index();
+        let end = self.last_descendant_idx() + 1;
+
+        let text = self.cst.data[start..end]
+            .iter()
+            .filter_map(|it| match it {
+                CstNodeData::Token(token) => Some(token.text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        text
     }
 
     pub fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result {
@@ -342,24 +482,21 @@ impl<'a> CstNode<'a> {
             return writeln!(f, "{s}");
         }
 
-        // Check if we are the last child of our parent
-        if self.parent().last_non_trivial_child_idx() == Some(self.id.to_index()) {
-            s = format!("└───{}", s);
-        } else {
-            s = format!("├───{}", s);
-        }
-
-        let parent = self.parent();
-        if parent.id == custom_root {
-            return writeln!(f, "{s}");
-        }
-
         let this_idx = self.id.to_index();
-        // Skip our parent - we start with grandparent
-        for ancestor in self.ancestors().skip(1) {
-            match ancestor.last_non_trivial_child_idx() {
-                Some(idx) if idx > this_idx => s = format!("├   {s}"),
-                _ => s = format!("    {s}"),
+        let parent_id = self.parent().id;
+
+        for ancestor in self.ancestors() {
+            if ancestor.id == parent_id {
+                if ancestor.last_non_trivial_child_idx() == Some(this_idx) {
+                    s = format!("└───{}", s);
+                } else {
+                    s = format!("├───{}", s);
+                }
+            } else {
+                match ancestor.last_non_trivial_child_idx() {
+                    Some(idx) if idx > this_idx => s = format!("├   {s}"),
+                    _ => s = format!("    {s}"),
+                }
             }
 
             if ancestor.id == custom_root {
