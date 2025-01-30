@@ -11,3 +11,7 @@ gen_ast:
 
 fmt:
     cargo +nightly fmt
+
+fix:
+    cargo +nightly fix --allow-dirty --all-features
+    just fmt

@@ -7,7 +7,6 @@ use bord_server::router;
 use tower::ServiceBuilder;
 use tracing::Level;
 
-
 #[tokio::main]
 async fn main() {
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
