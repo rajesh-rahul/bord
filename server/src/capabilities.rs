@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::*;
+use async_lsp::lsp_types::*;
 
 pub fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {

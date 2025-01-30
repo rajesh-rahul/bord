@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 bord-server = { path = "../server" }
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"]}
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"]}
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tower-lsp.workspace = true
+async-lsp = { version = "0.2.1", features = ["default"]}
+tower = "0.5"
+tokio-util = { version = "0.7.8", features = ["compat"] }

@@ -1,6 +1,6 @@
 use crate::text_document::TextDocument;
+use async_lsp::lsp_types as lsp;
 use dashmap::DashMap;
-use tower_lsp::lsp_types as lsp;
 
 #[derive(Default, Debug)]
 pub struct Vfs {
