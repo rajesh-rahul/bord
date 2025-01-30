@@ -1,7 +1,7 @@
 use crate::from_lsp;
-use bord_sqlite3_parser::{parse, SqliteParseError, SqliteUntypedCst};
+use async_lsp::lsp_types as lsp;
+use bord_sqlite3_parser::{parse, SqliteUntypedCst};
 use line_index::LineIndex;
-use tower_lsp::lsp_types as lsp;
 
 #[derive(Debug)]
 pub struct TextDocument {
@@ -16,8 +16,6 @@ pub struct TextDocument {
     pub(crate) contents: String,
     // TODO: Add lsp's language id info
     pub(crate) cst: SqliteUntypedCst,
-
-    pub(crate) diagnostics: Vec<lsp::Diagnostic>,
 }
 
 impl TextDocument {
@@ -29,7 +27,6 @@ impl TextDocument {
             doc_version,
             contents,
             cst,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -59,47 +56,7 @@ impl TextDocument {
 
         self.doc_version = doc_version;
         self.cst = parse(&self.contents);
-        self.update_diagnostics();
 
         Ok(())
-    }
-
-    pub fn errors(&self) -> &[SqliteParseError] {
-        self.cst.errors()
-    }
-
-    pub fn line_index(&self) -> &LineIndex {
-        &self.line_index
-    }
-
-    fn update_diagnostics(&mut self) {
-        self.diagnostics = self
-            .errors()
-            .iter()
-            .map(|err| {
-                let start_pos = self.line_index.try_line_col(err.range.0.into()).unwrap();
-                let end_pos = self.line_index.try_line_col((err.range.1).into()).unwrap();
-
-                let start = lsp::Position {
-                    line: start_pos.line,
-                    character: start_pos.col,
-                };
-                let end = lsp::Position {
-                    line: end_pos.line,
-                    character: end_pos.col + 1,
-                };
-                lsp::Diagnostic {
-                    range: lsp::Range { start, end },
-                    severity: Some(lsp::DiagnosticSeverity::ERROR),
-                    message: err.to_string(),
-                    source: Some("bordsql".into()),
-                    ..Default::default()
-                }
-            })
-            .collect();
-    }
-
-    pub(crate) fn diagnostics(&self) -> &[lsp::Diagnostic] {
-        &self.diagnostics
     }
 }
