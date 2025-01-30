@@ -9,10 +9,10 @@ mod from_lsp;
 mod text_document;
 mod vfs;
 
-use async_lsp::router::Router;
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::notification as not;
 use async_lsp::lsp_types::request as req;
+use async_lsp::router::Router;
 
 #[derive(Debug)]
 pub struct BordLangServer {
