@@ -1,0 +1,16 @@
+[package]
+name = "server-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bord-server = { path = "../server" }
+tokio = { version = "1", features = ["full"]}
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-lsp = { version = "0.2.1", features = ["default"]}
+tower = "0.5"
+tokio-util = { version = "0.7.8", features = ["compat"] }
+tracing-appender = "0.2.3"
+futures = "0.3.31"
+serde_json.workspace = true
