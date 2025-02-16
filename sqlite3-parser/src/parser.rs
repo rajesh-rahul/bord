@@ -3,24 +3,17 @@ use std::cell::Cell;
 use enumset::EnumSet;
 
 use crate::{
-    cst::SqliteUntypedCst,
     grammar::common::{
         EXPR_BIND_PARAM_START, EXPR_LIT_START, EXPR_PREFIX_START, IDEN_SET, JOIN_KEYWORDS,
     },
-    SqliteToken, SqliteTokenKind, SqliteTreeKind,
+    SqliteLexer, SqliteToken, SqliteTokenKind, SqliteTreeKind, SqliteUntypedCst, SqliteVersion,
 };
+use itertools::Itertools;
 
-pub struct SqliteParser {
-    pub(crate) all_tokens: Vec<SqliteToken>,
+pub struct SqliteParser<T> {
     pub(crate) events: Vec<Event>,
-
-    tokens: Vec<SqliteTokenKind>,
-    pos: usize,
-    all_tokens_pos: usize,
-    recoverable_token: Option<SqliteTokenKind>,
-    fuel: Cell<u32>,
-    errors: Vec<SqliteParseError>,
-    prev_token: Option<usize>,
+    pub lexer: T,
+    pub(crate) abs_pos: usize,
 
     // The following identifier related token sets come from parse.y of SQLite. Because
     // the IDEN_SET (or `ID` in parse.y) changes depending on the build of SQLite, we put
@@ -46,10 +39,13 @@ pub struct SqliteParser {
     pub(crate) with_alias_start: EnumSet<SqliteTokenKind>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Event {
-    Open { kind: SqliteTreeKind },
-    Error { error_idx: u16 },
+    Open {
+        kind: SqliteTreeKind,
+        close_idx: usize,
+    },
+    Error(ParseErrorKind),
     Close,
     Advance,
 }
@@ -64,20 +60,34 @@ pub(crate) struct MarkClosed {
     index: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SqliteParseError {
     pub range: (u32, u32),
     pub message: ParseErrorKind,
 }
 
-#[derive(Clone, Debug)]
-pub enum ParseErrorKind {
-    ExpectedItem(Vec<ExpectedItem>),
-    UnknownTokens,
-    OtherError(String),
+impl Default for SqliteParseError {
+    fn default() -> Self {
+        Self {
+            range: Default::default(),
+            message: ParseErrorKind::UnknownTokens,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// #[derive(Debug, Clone)]
+// pub struct SqliteParseError2 {
+//     pub message: ParseErrorKind,
+// }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    ExpectedItems(Vec<ExpectedItem>),
+    UnknownTokens,
+    // OtherError(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpectedItem {
     Token(SqliteTokenKind),
     Tree(SqliteTreeKind),
@@ -108,18 +118,283 @@ impl From<SqliteTreeKind> for ExpectedItem {
 
 impl<T: Into<ExpectedItem>> From<T> for ParseErrorKind {
     fn from(value: T) -> Self {
-        ParseErrorKind::ExpectedItem(vec![value.into()])
+        ParseErrorKind::ExpectedItems(vec![value.into()])
     }
 }
 
-impl From<&[ExpectedItem]> for ParseErrorKind {
-    fn from(value: &[ExpectedItem]) -> Self {
-        ParseErrorKind::ExpectedItem(value.to_vec())
+impl From<&'static [ExpectedItem]> for ParseErrorKind {
+    fn from(value: &'static [ExpectedItem]) -> Self {
+        ParseErrorKind::ExpectedItems(value.to_vec())
     }
 }
 
-impl SqliteParser {
-    pub fn new(tokens: Vec<SqliteToken>) -> Self {
+pub trait Lexer {
+    fn all_tokens(self) -> Vec<SqliteToken>;
+    fn eof(&self) -> bool;
+    fn tokens_so_far(&self) -> &[SqliteToken];
+    fn prev_non_triv_token(&self) -> Option<&SqliteToken>;
+    // fn first(&self) -> SqliteTokenKind;
+    // fn second(&self) -> SqliteTokenKind;
+    // fn third(&self) -> SqliteTokenKind;
+    fn nth(&self, lookahead: usize) -> SqliteTokenKind;
+    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind>;
+    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken>;
+    /// Returns how many tokens were eaten
+    fn eat_trivia(&mut self) -> usize;
+
+    /// Returns how many tokens were eaten
+    fn advance(&mut self) -> usize;
+
+    fn curr_byte_len(&self) -> usize;
+}
+
+pub struct OnDemandLexer<'a>
+where
+// IA: Iterator<Item = SqliteToken> + Clone,
+{
+    inner: Cell<Option<itertools::PeekNth<SqliteLexer<'a>>>>,
+    all_tokens: Vec<SqliteToken>,
+    fuel: Cell<u32>,
+    curr_byte_len: usize,
+    prev_non_triv_tk: Option<usize>,
+}
+
+pub struct NormalLexer {
+    all_tokens: Vec<SqliteToken>,
+    pos: usize,
+    fuel: Cell<u32>,
+    prev_non_triv_tk: Option<usize>,
+    all_tokens_pos: usize,
+    curr_byte_len: usize,
+    tokens: Vec<SqliteTokenKind>,
+}
+
+pub fn new_on_demand_lexer<'a>(text: &'a str, version: SqliteVersion) -> OnDemandLexer<'a> {
+    let lexer = SqliteLexer::new(text, version);
+
+    OnDemandLexer::from(lexer.clone())
+}
+impl<'a> OnDemandLexer<'a>
+where
+// IA: Iterator<Item = SqliteToken> + Clone,
+{
+    fn from(ia: SqliteLexer<'a>) -> Self {
+        OnDemandLexer {
+            inner: Cell::new(Some(itertools::peek_nth(ia))),
+            prev_non_triv_tk: None,
+            curr_byte_len: 0,
+            all_tokens: Vec::with_capacity(32),
+            fuel: Cell::new(256),
+        }
+    }
+}
+
+impl<'a> From<SqliteLexer<'a>> for NormalLexer {
+    fn from(value: SqliteLexer<'a>) -> Self {
+        let all_tokens = value.lex();
+
+        NormalLexer {
+            pos: 0,
+            prev_non_triv_tk: None,
+            all_tokens_pos: 0,
+            curr_byte_len: 0,
+            tokens: all_tokens
+                .iter()
+                .filter_map(|it| if !it.is_trivia() { Some(it.kind) } else { None })
+                .collect(),
+            all_tokens,
+            fuel: Cell::new(256),
+        }
+    }
+}
+
+impl<'a> Lexer for OnDemandLexer<'a>
+where
+// IA: Iterator<Item = SqliteToken> + Clone,
+{
+    fn eat_trivia(&mut self) -> usize {
+        let initial_size = self.all_tokens.len();
+
+        while let Some(tk) = self
+            .inner
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .next_if(|it| it.is_trivia())
+        {
+            self.curr_byte_len += tk.text.len();
+            self.all_tokens.push(tk);
+        }
+        // self.inner.set(Some(l));
+
+        return self.all_tokens.len() - initial_size;
+    }
+
+    fn eof(&self) -> bool {
+        self.nth(0) == SqliteTokenKind::EOF
+    }
+
+    fn advance(&mut self) -> usize {
+        let num_trivia_tk_eaten = self.eat_trivia();
+
+        if let Some(tk) = self.inner.get_mut().as_mut().unwrap().next() {
+            self.fuel.set(256);
+            self.prev_non_triv_tk = Some(self.all_tokens.len());
+            self.curr_byte_len += tk.text.len();
+            self.all_tokens.push(tk);
+            // self.inner_token_peek.get_mut().as_mut().unwrap().next().unwrap();
+        } else {
+            panic!("Unexpected EOF");
+        }
+
+        return num_trivia_tk_eaten + 1;
+    }
+
+    fn prev_non_triv_token(&self) -> Option<&SqliteToken> {
+        self.prev_non_triv_tk.map(|it| &self.all_tokens[it])
+    }
+
+    fn tokens_so_far(&self) -> &[SqliteToken] {
+        &self.all_tokens
+    }
+
+    fn all_tokens(self) -> Vec<SqliteToken> {
+        // assert!(self.eof());
+        self.all_tokens
+    }
+
+    fn curr_byte_len(&self) -> usize {
+        self.curr_byte_len
+    }
+
+    fn nth(&self, lookahead: usize) -> SqliteTokenKind {
+        if self.fuel.get() == 0 {
+            panic!("parser is stuck")
+        }
+        self.fuel.set(self.fuel.get() - 1);
+
+        let mut l = self.inner.take().unwrap();
+
+        let mut i = 0;
+        let mut actual_idx = 0;
+        loop {
+            match l.peek_nth(actual_idx) {
+                Some(tk) if tk.is_trivia() => {
+                    actual_idx += 1;
+                }
+                Some(_) => {
+                    if i == lookahead {
+                        break;
+                    } else {
+                        i += 1;
+                        actual_idx += 1;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        let result = l
+            .peek_nth(actual_idx)
+            .map_or(SqliteTokenKind::EOF, |it| it.kind);
+
+        self.inner.set(Some(l));
+
+        result
+    }
+
+    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
+        let iter = self.inner.take().unwrap();
+        self.inner.set(Some(iter.clone()));
+
+        iter.filter(|it| !it.is_trivia()).map(|it| it.kind)
+    }
+
+    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
+        let iter = self.inner.take().unwrap();
+        self.inner.set(Some(iter.clone()));
+
+        iter
+    }
+}
+
+impl Lexer for NormalLexer {
+    fn eat_trivia(&mut self) -> usize {
+        let initial_pos = self.all_tokens_pos;
+        while self.all_tokens_pos < self.all_tokens.len()
+            && self.all_tokens[self.all_tokens_pos].is_trivia()
+        {
+            self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text.len();
+            self.all_tokens_pos += 1;
+        }
+
+        return self.all_tokens_pos - initial_pos;
+    }
+
+    fn eof(&self) -> bool {
+        self.pos == self.tokens.len()
+    }
+
+    fn advance(&mut self) -> usize {
+        assert!(!self.eof());
+
+        let num_trivia_tk_eaten = self.eat_trivia();
+
+        self.fuel.set(256);
+        self.prev_non_triv_tk = Some(self.all_tokens_pos);
+        self.pos += 1;
+        self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text.len();
+        self.all_tokens_pos += 1;
+
+        return num_trivia_tk_eaten + 1;
+    }
+    fn curr_byte_len(&self) -> usize {
+        self.curr_byte_len
+    }
+
+    fn prev_non_triv_token(&self) -> Option<&SqliteToken> {
+        self.prev_non_triv_tk.map(|it| &self.all_tokens[it])
+    }
+
+    fn tokens_so_far(&self) -> &[SqliteToken] {
+        &self.all_tokens[..self.all_tokens_pos]
+    }
+
+    fn all_tokens(self) -> Vec<SqliteToken> {
+        assert!(self.eof());
+        self.all_tokens
+    }
+
+    fn nth(&self, lookahead: usize) -> SqliteTokenKind {
+        if self.fuel.get() == 0 {
+            panic!("parser is stuck")
+        }
+        self.fuel.set(self.fuel.get() - 1);
+
+        self.tokens
+            .get(self.pos + lookahead)
+            .map_or(SqliteTokenKind::EOF, |it| *it)
+    }
+
+    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
+        self.tokens[self.pos..].iter().copied()
+    }
+
+    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
+        self.all_tokens[self.all_tokens_pos..].iter().cloned()
+    }
+}
+
+impl<T: Lexer> SqliteParser<T> {
+    pub fn new(lexer: T) -> Self {
+        Self::_new(lexer, 0)
+    }
+
+    pub fn with_abs_pos(lexer: T, abs_pos: usize) -> Self {
+        Self::_new(lexer, abs_pos)
+    }
+
+    pub fn _new(lexer: T, abs_pos: usize) -> Self {
         use SqliteTokenKind::*;
         // TODO: Use a parser context to configure IDEN_SET at runtime
 
@@ -148,20 +423,11 @@ impl SqliteParser {
         let with_alias_start = iden_or_str | KW_AS;
 
         Self {
-            tokens: tokens
-                .iter()
-                .filter_map(|it| if !it.is_trivia() { Some(it.kind) } else { None })
-                .collect(),
-            all_tokens: tokens,
-            all_tokens_pos: 0,
-            pos: 0,
-            recoverable_token: None,
-            fuel: Cell::new(256),
+            lexer,
             events: Vec::new(),
-            errors: Vec::new(),
-            prev_token: None,
             iden_set,
             iden,
+            abs_pos, // TODO: unnecessary?
             name_token,
             iden_or_str,
             iden_or_join,
@@ -173,7 +439,7 @@ impl SqliteParser {
     pub(crate) fn wrap(
         &mut self,
         kind: SqliteTreeKind,
-        mut child_code: impl FnMut(&mut SqliteParser),
+        mut child_code: impl FnMut(&mut SqliteParser<T>),
     ) -> MarkClosed {
         let m = self.open();
         child_code(self);
@@ -184,91 +450,48 @@ impl SqliteParser {
         &mut self,
         error: impl Into<ParseErrorKind>,
         r: EnumSet<SqliteTokenKind>,
-        mut child_code: impl FnMut(&mut SqliteParser),
+        mut child_code: impl FnMut(&mut SqliteParser<T>),
     ) -> MarkClosed {
         let m = self.open();
 
-        let range_start = self.curr_non_triv_token().map(|it| it.start()).unwrap_or(0);
-        let mut range_end = self.curr_non_triv_token().map(|it| it.end()).unwrap_or(0);
+        // let range_start = self.peek_non_triv_token().map(|it| it.start()).unwrap_or(0);
+        // let mut range_end = self.peek_non_triv_token().map(|it| it.end()).unwrap_or(0);
 
         child_code(self);
 
-        if let Some(tk) = self.curr_non_triv_token() {
-            range_end = tk.start();
-        }
+        // if let Some(tk) = self.peek_non_triv_token() {
+        //     range_end = tk.start();
+        // }
 
-        while !self.eof() && !r.contains(self.nth(0)) {
+        while !self.lexer.eof() && !r.contains(self.nth(0)) {
             self.advance();
-            let (_, new_end) = self.prev_token().unwrap().full_range();
-            range_end = new_end
+            // let (_, new_end) = self.lexer.prev_non_triv_token().unwrap().full_range();
+            // range_end = new_end
         }
 
-        self.errors.push(SqliteParseError {
-            range: (range_start, range_end),
-            message: error.into(),
-        });
+        // self.errors.push(SqliteParseError {
+        //     range: (range_start, range_end),
+        //     message: error.into(),
+        // });
 
-        dbg!(&self.errors);
-
-        self.close_err(m, (self.errors.len() - 1) as u16)
-    }
-
-    pub(crate) fn build_tree<'a>(self) -> SqliteUntypedCst {
-        let mut all_tokens = self.all_tokens.into_iter();
-        let mut events = self.events;
-
-        assert!(matches!(events.pop(), Some(Event::Close { .. })));
-
-        let Some(Event::Open { kind, .. }) = events.first() else {
-            panic!("Expected something in events");
-        };
-
-        let mut cst = SqliteUntypedCst::with_capacity(
-            *kind,
-            events
-                .iter()
-                .filter(|it| !matches!(it, Event::Close))
-                .count(),
-        );
-        let mut curr = cst.root_mut();
-
-        for event in &events[1..] {
-            match event {
-                Event::Open { kind, .. } => {
-                    curr = curr.push_tree(*kind);
-                }
-                Event::Error { error_idx } => {
-                    curr = curr.push_error(*error_idx as usize);
-                }
-                Event::Close { .. } => {
-                    curr = curr.parent_mut();
-                }
-                Event::Advance => {
-                    let token = all_tokens.next().unwrap();
-
-                    curr.push_token(token);
-                }
-            }
-        }
-
-        assert!(all_tokens.next().is_none());
-
-        cst.add_errors(self.errors);
-
-        cst
+        self.close_err(m, error.into())
     }
 
     pub(crate) fn open(&mut self) -> MarkOpened {
         let mark = MarkOpened {
             index: self.events.len(),
         };
-        self.events.push(Event::Error { error_idx: 0 });
+        // Note: Unknown Tokens is a dummy value, really error kind is determined on `close_err`
+        self.events
+            .push(Event::Error(ParseErrorKind::UnknownTokens));
         mark
     }
 
     pub(crate) fn open_before(&mut self, m: MarkClosed) -> MarkOpened {
         let mark = MarkOpened { index: m.index };
-        self.events.insert(m.index, Event::Error { error_idx: 0 });
+        // Note: Event::Error is a dummy value. Real value is determined on `close`
+        self.events
+            .insert(m.index, Event::Error(ParseErrorKind::UnknownTokens));
         mark
     }
 
@@ -283,52 +506,48 @@ impl SqliteParser {
     }
 
     pub(crate) fn close(&mut self, m: MarkOpened, kind: SqliteTreeKind) -> MarkClosed {
-        self.events[m.index] = Event::Open { kind };
+        self.events[m.index] = Event::Open {
+            kind,
+            close_idx: self.events.len() - m.index,
+        };
         self.events.push(Event::Close);
         MarkClosed { index: m.index }
     }
 
-    pub(crate) fn close_err(&mut self, m: MarkOpened, error_idx: u16) -> MarkClosed {
-        self.events[m.index] = Event::Error { error_idx };
+    pub(crate) fn close_err(&mut self, m: MarkOpened, error: ParseErrorKind) -> MarkClosed {
+        self.events[m.index] = Event::Error(error);
         self.events.push(Event::Close);
         MarkClosed { index: m.index }
     }
 
     pub(crate) fn advance(&mut self) {
-        assert!(!self.eof());
+        let num_advances = self.lexer.advance();
 
-        self.eat_whitespace();
-
-        if let Some(token) = self.recoverable_token {
-            assert_eq!(self.all_tokens[self.all_tokens_pos].kind, token);
-            self.recoverable_token = None
-        }
-
-        self.fuel.set(256);
-        self.events.push(Event::Advance);
-        self.prev_token = Some(self.all_tokens_pos);
-        self.pos += 1;
-        self.all_tokens_pos += 1;
+        self.events
+            .extend(std::iter::repeat(Event::Advance).take(num_advances));
     }
 
-    pub(crate) fn expected(&mut self, item: impl Into<ExpectedItem>, r: EnumSet<SqliteTokenKind>) {
-        self.proceed_with_err(r, item.into());
-    }
+    // pub(crate) fn expected(&mut self, item: impl Into<ExpectedItem>, r: EnumSet<SqliteTokenKind>) {
+    //     self.proceed_with_err(r, ParseErrorKind::ExpectedItem(item.into()));
+    // }
 
     pub(crate) fn expected_one_of(
         &mut self,
-        items: impl Iterator<Item = ExpectedItem>,
+        items: &'static [ExpectedItem],
         r: EnumSet<SqliteTokenKind>,
     ) {
-        self.proceed_with_err(r, ParseErrorKind::ExpectedItem(items.collect()));
+        self.proceed_with_err(r, ParseErrorKind::ExpectedItems(items.to_vec()));
     }
 
-    pub(crate) fn tokens(&self) -> &[SqliteTokenKind] {
-        &self.tokens[self.pos..]
-    }
+    // pub(crate) fn tokens(&self) -> &[SqliteTokenKind] {
+    //     &self.tokens[self.pos..]
+    // }
 
     pub(crate) fn go_back_all_tokens_by(&self, n: usize) -> Option<&SqliteToken> {
-        self.all_tokens.get(self.all_tokens_pos - n - 1)
+        // self.all_tokens.get(self.all_tokens_pos - n - 1)
+        self.lexer
+            .tokens_so_far()
+            .get(self.lexer.tokens_so_far().len() - n - 1)
     }
 
     pub(crate) fn advance_by(&mut self, n: usize) {
@@ -337,9 +556,9 @@ impl SqliteParser {
         }
     }
 
-    pub(crate) fn prev_token(&self) -> Option<&SqliteToken> {
-        self.prev_token.map(|it| &self.all_tokens[it])
-    }
+    // pub(crate) fn prev_token(&self) -> Option<&SqliteToken> {
+    //     self.prev_token.map(|it| &self.all_tokens[it])
+    // }
 
     // pub(crate) fn proceed_with_err2(&mut self, expected_)
     // TODO: Non sensical values should be combined
@@ -354,6 +573,10 @@ impl SqliteParser {
 
         let can_recover = r.contains(curr_token_kind);
 
+        if !self.eof() && !can_recover {
+            self.advance();
+        }
+
         // let range = if !self.eof() && !can_recover {
         //     self.advance();
         //     self.prev_token()
@@ -365,42 +588,30 @@ impl SqliteParser {
         //         .unwrap_or((0, 0))
         // };
 
-        let mut range = self
-            .prev_token()
-            .map(|tk| (tk.end(), tk.end()))
-            .unwrap_or((0, 0));
-        while !self.eof() && !r.contains(self.nth(0)) {
+        // let mut range = self
+        //     .lexer
+        //     .prev_non_triv_token()
+        //     .map(|tk| (tk.end(), tk.end()))
+        //     .unwrap_or((0, 0));
+        while !self.lexer.eof() && !r.contains(self.nth(0)) {
             self.advance();
-            let (_, new_end) = self.prev_token().unwrap().full_range();
-            range = (range.0, new_end);
+            // let (_, new_end) = self.lexer.prev_non_triv_token().unwrap().full_range();
+            // range = (range.0, new_end);
         }
 
-        self.errors.push(SqliteParseError {
-            range,
-            message: error.into(),
-        });
-        self.close_err(m, (self.errors.len() - 1) as u16);
+        self.close_err(m, error.into());
     }
 
-    pub(crate) fn eof(&self) -> bool {
-        self.pos == self.tokens.len()
+    pub(crate) fn curr_byte_len(&self) -> usize {
+        self.lexer.curr_byte_len()
     }
 
     pub(crate) fn nth(&self, lookahead: usize) -> SqliteTokenKind {
-        if self.fuel.get() == 0 {
-            panic!("parser is stuck")
-        }
-        self.fuel.set(self.fuel.get() - 1);
-
-        self.tokens
-            .get(self.pos + lookahead)
-            .map_or(SqliteTokenKind::EOF, |it| *it)
+        self.lexer.nth(lookahead)
     }
 
-    pub(crate) fn curr_non_triv_token(&self) -> Option<&SqliteToken> {
-        self.all_tokens[self.all_tokens_pos..]
-            .iter()
-            .find(|it| !it.is_trivia())
+    pub(crate) fn peek_non_triv_token(&self) -> Option<SqliteToken> {
+        self.lexer.all_tokens_iter().find(|it| !it.is_trivia())
     }
 
     pub(crate) fn at(&self, kind: SqliteTokenKind) -> bool {
@@ -420,13 +631,14 @@ impl SqliteParser {
         }
     }
 
-    pub(crate) fn eat_whitespace(&mut self) {
-        while self.all_tokens_pos < self.all_tokens.len()
-            && self.all_tokens[self.all_tokens_pos].is_trivia()
-        {
-            self.all_tokens_pos += 1;
-            self.events.push(Event::Advance);
-        }
+    pub(crate) fn eat_trivia(&mut self) {
+        let num_advances = self.lexer.eat_trivia();
+        self.events.reserve(num_advances);
+
+        let end = self.lexer.tokens_so_far().len();
+        let start = end - num_advances;
+
+        (0..num_advances).for_each(|_| self.events.push(Event::Advance));
     }
 
     pub(crate) fn eat_any(&mut self, set: EnumSet<SqliteTokenKind>) -> bool {
@@ -456,29 +668,25 @@ impl SqliteParser {
         if !self.eat(kind) {
             let m = self.open();
 
-            let mut range = self
-                .prev_token()
-                .map(|tk| (tk.end(), tk.end()))
-                .unwrap_or((0, 0));
+            // let mut range = self
+            //     .lexer
+            //     .prev_non_triv_token()
+            //     .map(|tk| (tk.end(), tk.end()))
+            //     .unwrap_or((0, 0));
 
-            while !self.eof() && !r.contains(self.nth(0)) {
+            while !self.lexer.eof() && !r.contains(self.nth(0)) {
                 self.advance();
-                let (_, new_end) = self.prev_token().unwrap().full_range();
-                range = (range.0, new_end);
+                // let (_, new_end) = self.lexer.prev_non_triv_token().unwrap().full_range();
+                // range = (range.0, new_end);
             }
 
-            if self.at(kind) {
-                self.errors.push(SqliteParseError {
-                    range,
-                    message: ParseErrorKind::UnknownTokens,
-                });
+            let error = if self.at(kind) {
+                ParseErrorKind::UnknownTokens
             } else {
-                self.errors.push(SqliteParseError {
-                    range,
-                    message: kind.into(),
-                });
-            }
-            self.close_err(m, (self.errors.len() - 1) as u16);
+                kind.into()
+            };
+
+            self.close_err(m, error);
             self.eat(kind);
         }
     }
@@ -492,33 +700,30 @@ impl SqliteParser {
         if !self.at_any(kinds) {
             let m = self.open();
 
-            let mut range = self
-                .prev_token()
-                .map(|tk| (tk.end(), tk.end()))
-                .unwrap_or((0, 0));
+            // let mut range = self
+            //     .lexer
+            //     .prev_non_triv_token()
+            //     .map(|tk| (tk.end(), tk.end()))
+            //     .unwrap_or((0, 0));
 
-            while !self.eof() && !r.contains(self.nth(0)) {
+            while !self.lexer.eof() && !r.contains(self.nth(0)) {
                 self.advance();
-                let (_, new_end) = self.prev_token().unwrap().full_range();
-                range = (range.0, new_end);
+                // let (_, new_end) = self.lexer.prev_non_triv_token().unwrap().full_range();
+                // range = (range.0, new_end);
             }
 
             if self.at_any(kinds) {
-                self.errors.push(SqliteParseError {
-                    range,
-                    message: ParseErrorKind::UnknownTokens,
-                });
-                let err_close_m = self.close_err(m, (self.errors.len() - 1) as u16);
+                // self.errors.push(SqliteParseError {
+                //     range,
+                //     message: ParseErrorKind::UnknownTokens,
+                // });
+                let err_close_m = self.close_err(m, ParseErrorKind::UnknownTokens);
 
                 let m = self.open_before(err_close_m);
                 self.guaranteed_any(kinds);
                 self.close(m, expected);
             } else {
-                self.errors.push(SqliteParseError {
-                    range,
-                    message: expected.into(),
-                });
-                self.close_err(m, (self.errors.len() - 1) as u16);
+                self.close_err(m, expected.into());
             }
         } else {
             let m = self.open();
@@ -535,11 +740,61 @@ impl SqliteParser {
         if self.at_any(kinds) {
             return true;
         } else {
-            self.tokens()
-                .iter()
-                .skip_while(|&&it| !r.contains(it))
+            self.lexer
+                .non_triv_token_kinds()
+                .skip_while(|&it| !r.contains(it))
                 .next()
-                .is_some_and(|&it| kinds.contains(it))
+                .is_some_and(|it| kinds.contains(it))
         }
+    }
+
+    pub(crate) fn eof(&self) -> bool {
+        self.lexer.eof()
+    }
+
+    pub(crate) fn build_cst<'a>(self) -> SqliteUntypedCst {
+        let mut all_tokens = self.lexer.all_tokens().into_iter();
+        let mut events = self.events;
+
+        assert!(matches!(events.pop(), Some(Event::Close { .. })));
+
+        let Some(Event::Open { .. }) = events.first() else {
+            panic!("Expected something in events");
+        };
+
+        let mut cst = SqliteUntypedCst::with_capacity(self.abs_pos, 10);
+        let mut curr = cst.root_mut();
+
+        for (idx, event) in events[1..].iter().enumerate() {
+            match event {
+                Event::Open { kind, close_idx } => {
+                    assert!(matches!(events[idx + close_idx + 1], Event::Close));
+                    let capacity = events[idx + 1..idx + close_idx + 1]
+                        .iter()
+                        .filter(|it| !matches!(it, Event::Close { .. }))
+                        .count();
+                    curr = curr.push_tree(*kind, capacity);
+                    // curr = curr.push_tree(*kind);
+                }
+                Event::Error(error) => {
+                    curr = curr.push_error(error.clone(), 4);
+                    // curr = curr.push_error(*error_idx as usize);
+                }
+                Event::Close { .. } => {
+                    curr = curr.parent_mut();
+                }
+                Event::Advance => {
+                    let token = all_tokens.next().unwrap();
+
+                    curr.push_token(token);
+                }
+            }
+        }
+
+        assert!(all_tokens.next().is_none());
+
+        // cst.add_errors(self.errors);
+
+        cst
     }
 }

@@ -3,8 +3,8 @@ use crate::ungram::{
     UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind, UNGRAMMAR,
 };
 use crate::{
-    CstNode, CstNodeData, SqliteLexer, SqliteParseError, SqliteParser, SqliteTokenKind,
-    SqliteUntypedCst, SqliteVersion,
+    CstNode, CstNodeDataKind, NormalLexer, ParseErrorKind, SqliteLexer, SqliteParser,
+    SqliteTokenKind, SqliteUntypedCst, SqliteVersion,
 };
 use core::str;
 use nom::bytes::complete::escaped;
@@ -23,83 +23,72 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
 
     while let Some(result) = traverser.next() {
         match result {
-            UngramTraverserNodeKind::Token { name, ast_node, .. } => match ast_node {
-                Some(
-                    node @ CstNode {
-                        data: CstNodeData::Token(tk),
-                        ..
-                    },
-                ) if node.as_str() == name.trim_start_matches("KW_")
-                    || fat_ungram_tokens_match_ast(name, tk.kind) =>
-                {
-                    traverser.token_visited();
-                    before_backtrack = None;
-                    match_history.push(name.to_owned());
-                }
-                Some(
-                    node @ CstNode {
-                        data: CstNodeData::Error(_),
-                        ..
-                    },
-                ) if parse_err_corresponds_to_ungram_item(name, node.error().unwrap()) => {
-                    traverser.ignore_token_because_err();
-                    before_backtrack = None;
-                    match_history.push(format!("Ignored: {name}"));
-                }
-                _ => {
-                    let ast_node_as_string = ast_node
-                        .map(|it| it.as_str().to_owned())
-                        .unwrap_or("None".to_string());
-                    if before_backtrack.is_none() {
-                        before_backtrack = Some((name.to_owned(), ast_node_as_string));
+            UngramTraverserNodeKind::Token { name, ast_node, .. } => {
+                match ast_node.map(|it| &it.data.kind) {
+                    Some(CstNodeDataKind::Token(tk))
+                        if tk.kind.as_str() == name.trim_start_matches("KW_")
+                            || fat_ungram_tokens_match_ast(name, tk.kind) =>
+                    {
+                        traverser.token_visited();
+                        before_backtrack = None;
+                        match_history.push(name.to_owned());
                     }
+                    Some(CstNodeDataKind::Error(err))
+                        if parse_err_corresponds_to_ungram_item(name, &err) =>
+                    {
+                        traverser.ignore_token_because_err();
+                        before_backtrack = None;
+                        match_history.push(format!("Ignored: {name}"));
+                    }
+                    _ => {
+                        let ast_node_as_string = ast_node
+                            .map(|it| it.as_str().to_owned())
+                            .unwrap_or("None".to_string());
+                        if before_backtrack.is_none() {
+                            before_backtrack = Some((name.to_owned(), ast_node_as_string));
+                        }
 
-                    if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
-                        if let Some((ungrammar_expected, ast_value)) = before_backtrack {
-                            panic!("Ungrammar expected token {ungrammar_expected} but ast had {ast_value}\nMatch History: {match_history:?}")
-                        } else {
-                            panic!("Ungrammar mismatch")
+                        if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
+                            if let Some((ungrammar_expected, ast_value)) = before_backtrack {
+                                panic!("Ungrammar expected token {ungrammar_expected} but ast had {ast_value}\nMatch History: {match_history:?}")
+                            } else {
+                                panic!("Ungrammar mismatch")
+                            }
                         }
                     }
                 }
-            },
-            UngramTraverserNodeKind::Tree { name, ast_node, .. } => match ast_node {
-                Some(
-                    node @ CstNode {
-                        data: CstNodeData::Tree(_),
-                        ..
-                    },
-                ) if node.as_str() == name => {
-                    traverser.node_visited_and_expand_children();
-                    before_backtrack = None;
-                    match_history.push(name.to_owned());
-                }
-                Some(
-                    node @ CstNode {
-                        data: CstNodeData::Error(_),
-                        ..
-                    },
-                ) if parse_err_corresponds_to_ungram_item(name, node.error().unwrap()) => {
-                    traverser.ignore_node_because_err();
-                    match_history.push(format!("Ignored: {name}"));
-                    before_backtrack = None;
-                }
-                _ => {
-                    let ast_node_as_string = ast_node
-                        .map(|it| it.as_str().to_owned())
-                        .unwrap_or("None".to_string());
-                    if before_backtrack.is_none() {
-                        before_backtrack = Some((name.to_owned(), ast_node_as_string));
+            }
+            UngramTraverserNodeKind::Tree { name, ast_node, .. } => {
+                match ast_node.map(|it| &it.data.kind) {
+                    Some(CstNodeDataKind::Tree(tree_kind)) if tree_kind.as_str() == name => {
+                        traverser.node_visited_and_expand_children();
+                        before_backtrack = None;
+                        match_history.push(name.to_owned());
                     }
-                    if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
-                        if let Some((ungrammar_expected, ast_value)) = before_backtrack {
-                            panic!("Ungrammar expected {ungrammar_expected} but ast had {ast_value}\nMatch History: {match_history:?}")
-                        } else {
-                            panic!("Ungrammar mismatch")
+                    Some(CstNodeDataKind::Error(err))
+                        if parse_err_corresponds_to_ungram_item(name, &err) =>
+                    {
+                        traverser.ignore_node_because_err();
+                        match_history.push(format!("Ignored: {name}"));
+                        before_backtrack = None;
+                    }
+                    _ => {
+                        let ast_node_as_string = ast_node
+                            .map(|it| it.as_str().to_owned())
+                            .unwrap_or("None".to_string());
+                        if before_backtrack.is_none() {
+                            before_backtrack = Some((name.to_owned(), ast_node_as_string));
+                        }
+                        if traverser.backtrack() == UngramTraverserBacktrackResult::Fail {
+                            if let Some((ungrammar_expected, ast_value)) = before_backtrack {
+                                panic!("Ungrammar expected {ungrammar_expected} but ast had {ast_value}\nMatch History: {match_history:?}")
+                            } else {
+                                panic!("Ungrammar mismatch")
+                            }
                         }
                     }
                 }
-            },
+            }
         }
     }
 
@@ -128,7 +117,7 @@ pub enum SimpleSqliteNode {
 }
 
 pub fn check_ast(
-    parse_function: fn(&mut SqliteParser, r: enumset::EnumSet<SqliteTokenKind>),
+    parse_function: fn(&mut SqliteParser<NormalLexer>, r: enumset::EnumSet<SqliteTokenKind>),
     r: enumset::EnumSet<SqliteTokenKind>,
     input: &str,
     expected_ast: &str,
@@ -137,10 +126,10 @@ pub fn check_ast(
     check_input(&ast, expected_ast)
 }
 
-pub fn parse_is_at(func: fn(&SqliteParser) -> bool, input: &str) -> bool {
-    let (tokens, _) = SqliteLexer::new(input, SqliteVersion([3, 46, 0])).lex();
+pub fn parse_is_at(func: fn(&SqliteParser<NormalLexer>) -> bool, input: &str) -> bool {
+    let lexer = SqliteLexer::new(input, SqliteVersion([3, 46, 0]));
 
-    let p = SqliteParser::new(tokens);
+    let p = SqliteParser::new(NormalLexer::from(lexer));
 
     func(&p)
 }
@@ -166,11 +155,11 @@ pub fn check_input(actual_tree: &SqliteUntypedCst, expected_as_str: &str) {
     }
 }
 
-fn parse_err_corresponds_to_ungram_item(ungram_item: &str, err: &SqliteParseError) -> bool {
+fn parse_err_corresponds_to_ungram_item(ungram_item: &str, err: &ParseErrorKind) -> bool {
     use crate::parser::{ExpectedItem, ParseErrorKind};
 
-    match &err.message {
-        ParseErrorKind::ExpectedItem(vec) => vec.iter().any(|it| match it {
+    match &err {
+        ParseErrorKind::ExpectedItems(vec) => vec.iter().any(|it| match it {
             ExpectedItem::Token(tk_kind) => {
                 tk_kind.as_str() == ungram_item.trim_start_matches("KW_")
                     || fat_ungram_tokens_match_ast(ungram_item, *tk_kind)
@@ -178,7 +167,6 @@ fn parse_err_corresponds_to_ungram_item(ungram_item: &str, err: &SqliteParseErro
             ExpectedItem::Tree(tree_kind) => ungram_item == tree_kind.as_str(),
         }),
         ParseErrorKind::UnknownTokens => false,
-        ParseErrorKind::OtherError(_) => false,
     }
 }
 
@@ -263,15 +251,15 @@ fn str_to_simple_node<'a>(i: &'a str) -> IResult<&'a str, SimpleSqliteNode, Verb
 }
 
 fn into_simple_node(input: CstNode, ast: &SqliteUntypedCst) -> Option<SimpleSqliteNode> {
-    let simple_node = match input.data {
-        CstNodeData::Tree(tree_kind) => SimpleSqliteNode::SqliteNode {
+    let simple_node = match &input.data.kind {
+        CstNodeDataKind::Tree(tree_kind) => SimpleSqliteNode::SqliteNode {
             name: format!("{:?}", tree_kind),
             children: input
                 .children()
                 .flat_map(|child| into_simple_node(child, ast))
                 .collect(),
         },
-        CstNodeData::Token(token) if !token.is_trivia() => match token.kind {
+        CstNodeDataKind::Token(token) if !token.is_trivia() => match token.kind {
             SqliteTokenKind::IDEN
             | SqliteTokenKind::HEX_LIT
             | SqliteTokenKind::BLOB_LIT
@@ -285,7 +273,7 @@ fn into_simple_node(input: CstNode, ast: &SqliteUntypedCst) -> Option<SimpleSqli
 
             _ => SimpleSqliteNode::Leaf(token.kind.as_str().to_owned()),
         },
-        CstNodeData::Error(_) => SimpleSqliteNode::SqliteNode {
+        CstNodeDataKind::Error(_) => SimpleSqliteNode::SqliteNode {
             name: format!("Error"),
             children: input
                 .children()
