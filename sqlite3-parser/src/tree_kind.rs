@@ -1,3 +1,5 @@
+use crate::ExpectedItem;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum SqliteTreeKind {
     File,
@@ -275,6 +277,10 @@ pub enum SqliteTreeKind {
 }
 
 impl SqliteTreeKind {
+    pub const fn to_expected_item(&self) -> ExpectedItem {
+        ExpectedItem::Tree(*self)
+    }
+
     pub fn as_str(&self) -> &'static str {
         use SqliteTreeKind::*;
         match self {

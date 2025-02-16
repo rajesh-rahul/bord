@@ -2,6 +2,8 @@
 
 use enumset::EnumSetType;
 
+use crate::ExpectedItem;
+
 pub const MAX_KEYWORD_LEN: usize = 17;
 
 #[derive(Debug, PartialOrd, Ord, Hash, EnumSetType)]
@@ -237,6 +239,10 @@ pub enum SqliteTokenKind {
 }
 
 impl SqliteTokenKind {
+    pub const fn to_expected_item(&self) -> ExpectedItem {
+        ExpectedItem::Token(*self)
+    }
+
     pub const fn size(&self) -> Option<u8> {
         use SqliteTokenKind::*;
 
@@ -358,7 +364,7 @@ macro_rules! T {
 }
 
 impl SqliteTokenKind {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         use SqliteTokenKind::*;
 
         match self {
