@@ -353,7 +353,7 @@ impl CstTrait for IncrSqlCst {
     fn use_tree_capacity() -> bool {
         true
     }
-    
+
     fn with_capacity(abs_pos: usize, _capacity: usize) -> Self {
         let mut branches = Vec::with_capacity(10);
         let mut branch_positions = Vec::with_capacity(10);
