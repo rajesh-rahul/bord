@@ -13,7 +13,7 @@ fn parser_benchmark(c: &mut Criterion) {
     group.bench_function("Bord Parser", |b| {
         b.iter(|| {
             let cst = bord_sqlite3_parser::parse(input_sql);
-            assert!(cst.errors().is_empty());
+            assert!(cst.errors().next().is_none());
         })
     });
 
@@ -50,7 +50,7 @@ fn basic_queries(c: &mut Criterion) {
     group.bench_with_input("bord_parser::select", &string, |b, &s| {
         b.iter(|| {
             let cst = bord_sqlite3_parser::parse(s);
-            assert!(cst.errors().is_empty());
+            assert!(cst.errors().next().is_none());
         });
     });
 
@@ -79,7 +79,7 @@ fn basic_queries(c: &mut Criterion) {
     group.bench_with_input("bord_parser::with_select", &with_query, |b, &s| {
         b.iter(|| {
             let cst = bord_sqlite3_parser::parse(s);
-            assert!(cst.errors().is_empty());
+            assert!(cst.errors().next().is_none());
         });
     });
 }
