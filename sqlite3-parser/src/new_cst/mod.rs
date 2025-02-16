@@ -247,8 +247,88 @@ pub struct ModifiedBranchesInfo {
     pub num_new_branches: usize,
 }
 
+pub trait CstTrait {
+    type Node<'a>: CstNodeTrait<'a>
+    where
+        Self: 'a;
+
+    type Mut<'a>: CstMutTrait<'a>
+    where
+        Self: 'a;
+
+    fn with_capacity(abs_pos: usize, capacity: usize) -> Self;
+
+    fn updated_text_patch(&self, patch: TextPatch<(), ()>) -> TextPatch<usize, usize>;
+
+    fn errors<'a>(&'a self) -> impl DoubleEndedIterator<Item = Self::Node<'a>>;
+
+    fn root<'a>(&'a self) -> Self::Node<'a>;
+
+    fn root_mut<'a>(&'a mut self) -> Self::Mut<'a>;
+
+    fn statements<'a>(&'a self) -> impl Iterator<Item = Self::Node<'a>>;
+
+    fn merge_cst(&mut self, new_cst: Self, patch: TextPatch<usize, usize>) -> ModifiedBranchesInfo;
+}
+
 impl SqliteUntypedCst {
-    pub fn with_capacity(abs_pos: usize, capacity: usize) -> Self {
+    fn push_cst_branch(&mut self, data: CstNodeData, capacity: usize) -> NodeId {
+        let branch_id = self.branches.len();
+        self.branches.push(CstBranch::with_capacity(data, capacity));
+
+        self.branch_positions.push(self.byte_len);
+        // self.branches[0].children[0].push(branch_id);
+
+        NodeId::new(branch_id, 0)
+    }
+
+    fn push_child(&mut self, branch_id: usize, parent: usize, data: CstNodeData) -> NodeId {
+        assert!(branch_id < self.branches.len());
+
+        let child_id = self.branches[branch_id].push_child(parent, data);
+
+        NodeId::new(branch_id, child_id)
+    }
+
+    fn num_branches(&self) -> usize {
+        self.branches.len() - 1
+    }
+
+    fn has_branch(&self, branch_id: usize) -> bool {
+        branch_id < self.num_branches() && branch_id > 0
+    }
+
+    fn node_mut<'a>(&'a mut self, NodeId { branch_id, id }: NodeId) -> CstMut<'a> {
+        assert!(branch_id < self.branches.len());
+        assert!(id < self.branches[branch_id].len());
+
+        let parent = self.branches[branch_id].parent(id);
+
+        CstMut {
+            fat_id: NodeId::new(branch_id, id),
+            parent,
+            cst: self,
+        }
+    }
+
+    fn node<'a>(&'a self, NodeId { branch_id, id }: NodeId) -> CstNode<'a> {
+        assert!(branch_id < self.branches.len());
+        assert!(id < self.branches[branch_id].len());
+
+        let data = self.branches[branch_id].data(id);
+
+        CstNode {
+            fat_id: NodeId::new(branch_id, id),
+            data,
+            cst: self,
+        }
+    }
+}
+impl CstTrait for SqliteUntypedCst {
+    type Node<'a> = CstNode<'a>;
+    type Mut<'a> = CstMut<'a>;
+
+    fn with_capacity(abs_pos: usize, capacity: usize) -> Self {
         let mut branches = Vec::with_capacity(capacity + 1);
         let mut branch_positions = Vec::with_capacity(capacity + 1);
         // First branch is a special branch that belongs to the root
@@ -263,37 +343,7 @@ impl SqliteUntypedCst {
         }
     }
 
-    pub fn push_cst_branch(&mut self, data: CstNodeData, capacity: usize) -> NodeId {
-        // self.branches[0].data.push(data.clone());
-        // self.branches[0].parents.push(Some(0));
-        // self.branches[0].children.push(TinyVec::new());
-
-        let branch_id = self.branches.len();
-        self.branches.push(CstBranch::with_capacity(data, capacity));
-
-        self.branch_positions.push(self.byte_len);
-        // self.branches[0].children[0].push(branch_id);
-
-        NodeId::new(branch_id, 0)
-    }
-
-    pub fn push_child(&mut self, branch_id: usize, parent: usize, data: CstNodeData) -> NodeId {
-        assert!(branch_id < self.branches.len());
-
-        let child_id = self.branches[branch_id].push_child(parent, data);
-
-        NodeId::new(branch_id, child_id)
-    }
-
-    pub fn num_branches(&self) -> usize {
-        self.branches.len() - 1
-    }
-
-    pub fn has_branch(&self, branch_id: usize) -> bool {
-        branch_id < self.num_branches() && branch_id > 0
-    }
-
-    pub fn updated_text_patch(&self, patch: TextPatch<(), ()>) -> TextPatch<usize, usize> {
+    fn updated_text_patch(&self, patch: TextPatch<(), ()>) -> TextPatch<usize, usize> {
         let find_node_with_pos = |pos: usize| {
             let p_point = self.branch_positions[1..].partition_point(|it| *it < pos) + 1;
             if self.has_branch(p_point) && self.branch_positions[p_point] == pos {
@@ -337,6 +387,14 @@ impl SqliteUntypedCst {
         }
     }
 
+    fn root_mut<'a>(&'a mut self) -> CstMut<'a> {
+        CstMut {
+            fat_id: NodeId::new(0, 0),
+            parent: None,
+            cst: self,
+        }
+    }
+
     // pub fn with_capacity(root: SqliteTreeKind, capacity: usize) -> Self {
     //     let mut cst = SqliteUntypedCst {
     //         data: Vec::with_capacity(capacity),
@@ -350,7 +408,7 @@ impl SqliteUntypedCst {
     //     cst
     // }
 
-    pub fn errors<'a>(&'a self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
+    fn errors<'a>(&'a self) -> impl DoubleEndedIterator<Item = CstNode<'a>> {
         self.root()
             .me_and_descendants()
             .filter(|it| it.error().is_some())
@@ -360,33 +418,7 @@ impl SqliteUntypedCst {
     //     ast::File::cast(self.root()).unwrap()
     // }
 
-    pub fn node<'a>(&'a self, NodeId { branch_id, id }: NodeId) -> CstNode<'a> {
-        assert!(branch_id < self.branches.len());
-        assert!(id < self.branches[branch_id].len());
-
-        let data = self.branches[branch_id].data(id);
-
-        CstNode {
-            fat_id: NodeId::new(branch_id, id),
-            data,
-            cst: self,
-        }
-    }
-
-    pub fn node_mut<'a>(&'a mut self, NodeId { branch_id, id }: NodeId) -> CstMut<'a> {
-        assert!(branch_id < self.branches.len());
-        assert!(id < self.branches[branch_id].len());
-
-        let parent = self.branches[branch_id].parent(id);
-
-        CstMut {
-            fat_id: NodeId::new(branch_id, id),
-            parent,
-            cst: self,
-        }
-    }
-
-    pub fn root<'a>(&'a self) -> CstNode<'a> {
+    fn root<'a>(&'a self) -> CstNode<'a> {
         static ROOT: CstNodeData = CstNodeData {
             kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
             relative_pos: 0,
@@ -399,21 +431,13 @@ impl SqliteUntypedCst {
         }
     }
 
-    pub fn root_mut(&mut self) -> CstMut {
-        CstMut {
-            fat_id: NodeId::new(0, 0),
-            parent: None,
-            cst: self,
-        }
-    }
-
-    pub fn statements(&self) -> impl Iterator<Item = CstNode<'_>> {
+    fn statements(&self) -> impl Iterator<Item = CstNode<'_>> {
         self.root()
             .children()
             .filter(|it| it.tree() == Some(SqliteTreeKind::Statement))
     }
 
-    pub fn merge_cst(
+    fn merge_cst(
         &mut self,
         new_cst: SqliteUntypedCst,
         patch: TextPatch<usize, usize>,
@@ -493,41 +517,18 @@ impl SqliteUntypedCst {
     }
 }
 
-impl<'a> CstMut<'a> {
-    pub fn parent_mut(self) -> CstMut<'a> {
-        if self.fat_id.is_root() {
-            panic!("Root node do not have parent")
-        }
+pub trait CstMutTrait<'a> {
+    fn parent_mut(self) -> Self;
 
-        if let Some(parent) = self.parent {
-            self.cst
-                .node_mut(NodeId::new(self.fat_id.branch_id, parent))
-        } else {
-            self.cst.root_mut()
-        }
-    }
+    fn push_tree(self, tree: SqliteTreeKind, capacity: usize) -> Self;
 
-    pub fn push_tree(mut self, tree: SqliteTreeKind, capacity: usize) -> CstMut<'a> {
-        let fat_id = self.append(CstNodeDataKind::Tree(tree), capacity);
+    fn push_token(&mut self, token: SqliteToken);
 
-        self.cst.node_mut(fat_id)
-    }
+    fn push_error(self, error: ParseErrorKind, capacity: usize) -> Self;
+}
 
-    pub fn push_token(&mut self, token: SqliteToken) -> CstMut<'_> {
-        let byte_len_to_add = token.text.len();
-        let fat_id = self.append(CstNodeDataKind::Token(token), 1);
-        self.cst.byte_len += byte_len_to_add;
-
-        self.cst.node_mut(fat_id)
-    }
-
-    pub fn push_error(mut self, error: ParseErrorKind, capacity: usize) -> CstMut<'a> {
-        let fat_id = self.append(CstNodeDataKind::Error(error), capacity);
-
-        self.cst.node_mut(fat_id)
-    }
-
-    pub fn append(&mut self, kind: CstNodeDataKind, capacity: usize) -> NodeId {
+impl CstMut<'_> {
+    fn append(&mut self, kind: CstNodeDataKind, capacity: usize) -> NodeId {
         if self.fat_id.is_root() {
             self.cst.push_cst_branch(
                 CstNodeData {
@@ -549,6 +550,38 @@ impl<'a> CstMut<'a> {
         }
     }
 }
+impl<'a> CstMutTrait<'a> for CstMut<'a> {
+    fn parent_mut(self) -> CstMut<'a> {
+        if self.fat_id.is_root() {
+            panic!("Root node do not have parent")
+        }
+
+        if let Some(parent) = self.parent {
+            self.cst
+                .node_mut(NodeId::new(self.fat_id.branch_id, parent))
+        } else {
+            self.cst.root_mut()
+        }
+    }
+
+    fn push_tree(mut self, tree: SqliteTreeKind, capacity: usize) -> CstMut<'a> {
+        let fat_id = self.append(CstNodeDataKind::Tree(tree), capacity);
+
+        self.cst.node_mut(fat_id)
+    }
+
+    fn push_token(&mut self, token: SqliteToken) {
+        let byte_len_to_add = token.text.len();
+        let fat_id = self.append(CstNodeDataKind::Token(token), 1);
+        self.cst.byte_len += byte_len_to_add;
+    }
+
+    fn push_error(mut self, error: ParseErrorKind, capacity: usize) -> CstMut<'a> {
+        let fat_id = self.append(CstNodeDataKind::Error(error), capacity);
+
+        self.cst.node_mut(fat_id)
+    }
+}
 
 impl CstNodeData {
     pub fn is_trivial(&self) -> bool {
@@ -559,29 +592,126 @@ impl CstNodeData {
     }
 }
 
-impl<'a> CstNode<'a> {
-    pub fn token(&self) -> Option<&'a SqliteToken> {
+pub trait CstNodeTrait<'a> {
+    fn token(&self) -> Option<&'a SqliteToken>;
+
+    fn token_kind(&self) -> Option<SqliteTokenKind>;
+
+    fn error(&self) -> Option<&'a ParseErrorKind>;
+
+    fn tree(&self) -> Option<SqliteTreeKind>;
+
+    /// Panics if self is root
+    fn parent(self) -> CstNode<'a>;
+
+    fn children(
+        self,
+    ) -> Either<
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+    >;
+
+    fn non_trivial_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_;
+
+    fn valid_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_;
+
+    fn find_children(&self, key: impl ChildNodeKey) -> impl Iterator<Item = CstNode<'a>>;
+
+    // Iterate over earlier siblings (In insertion order)
+    /// Panics if node is root
+    fn left_siblings(
+        &self,
+    ) -> Either<
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+        impl DoubleEndedIterator<Item = CstNode<'a>> + '_,
+    >;
+
+    // Iterate over later siblings (In insertion order)
+    /// Panics if node is root
+    fn right_siblings(
+        &self,
+    ) -> Either<
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+        impl DoubleEndedIterator<Item = CstNode<'a>> + '_,
+    >;
+
+    fn has_errors(&self) -> bool;
+
+    fn byte_len(&self) -> usize;
+
+    // Iterate over siblings (In insertion order), skipping ourselves
+    fn siblings(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_;
+
+    fn ancestors(&self) -> AncestorIter<'a>;
+
+    fn me_and_descendants(
+        self,
+    ) -> Either<
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+        impl DoubleEndedIterator<Item = CstNode<'a>>,
+    >;
+
+    fn is_root(&self) -> bool;
+
+    fn is_trivia(&self) -> bool;
+
+    fn start_pos(&self) -> usize;
+
+    fn start_pos_skip_trivia(&self) -> usize;
+
+    fn end_pos(&self) -> usize;
+
+    fn end_pos_skip_trivia(&self) -> usize;
+
+    fn offset(&self) -> usize;
+    /// Use `allow_trivial` to include trivial tokens such as whitespace in end_pos calculation.
+    ///
+    /// This may not be desired in cases such as when we need to show error squiggly lines
+    /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
+    // NOTE: We can also implement this by recursively calling start_pos on the first child
+    // until we find a token node - but this gotta be faster
+    fn start_pos_configurable(&self, allow_trivial: bool) -> usize;
+
+    /// Use `allow_trivial` to include trivial tokens such as whitespace in end_pos calculation.
+    ///
+    /// This may not be desired in cases such as when we need to show error squiggly lines
+    /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
+    fn end_pos_configurable(&self, allow_trivial: bool) -> usize;
+
+    fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+
+    fn as_str(&self) -> &'static str;
+
+    fn to_text(&self) -> String;
+
+    fn to_text_with_capacity(&self, capacity: usize) -> String;
+
+    fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result;
+}
+
+impl<'a> CstNodeTrait<'a> for CstNode<'a> {
+    fn token(&self) -> Option<&'a SqliteToken> {
         match &self.data.kind {
             CstNodeDataKind::Token(tk) => Some(tk),
             _ => None,
         }
     }
 
-    pub fn token_kind(&self) -> Option<SqliteTokenKind> {
+    fn token_kind(&self) -> Option<SqliteTokenKind> {
         match &self.data.kind {
             CstNodeDataKind::Token(tk) => Some(tk.kind),
             _ => None,
         }
     }
 
-    pub fn error(&self) -> Option<&'a ParseErrorKind> {
+    fn error(&self) -> Option<&'a ParseErrorKind> {
         match &self.data.kind {
             CstNodeDataKind::Error(err) => Some(err),
             _ => None,
         }
     }
 
-    pub fn tree(&self) -> Option<SqliteTreeKind> {
+    fn tree(&self) -> Option<SqliteTreeKind> {
         match &self.data.kind {
             CstNodeDataKind::Tree(tree) => Some(*tree),
             _ => None,
@@ -589,7 +719,7 @@ impl<'a> CstNode<'a> {
     }
 
     /// Panics if self is root
-    pub fn parent(self) -> CstNode<'a> {
+    fn parent(self) -> CstNode<'a> {
         let NodeId { branch_id, id } = self.fat_id.into();
 
         match self.cst.branches[branch_id].parent(id) {
@@ -598,7 +728,7 @@ impl<'a> CstNode<'a> {
         }
     }
 
-    pub fn children(
+    fn children(
         self,
     ) -> Either<
         impl DoubleEndedIterator<Item = CstNode<'a>>,
@@ -626,23 +756,23 @@ impl<'a> CstNode<'a> {
         }
     }
 
-    pub fn non_trivial_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
+    fn non_trivial_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
         self.children()
             .filter(|it| !it.token().is_some_and(|it| it.is_trivia()))
     }
 
-    pub fn valid_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
+    fn valid_children(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
         self.non_trivial_children()
             .filter(|it| it.error().is_none())
     }
 
-    pub fn find_children(&self, key: impl ChildNodeKey) -> impl Iterator<Item = CstNode<'a>> {
+    fn find_children(&self, key: impl ChildNodeKey) -> impl Iterator<Item = CstNode<'a>> {
         key.find_children(*self)
     }
 
     // Iterate over earlier siblings (In insertion order)
     /// Panics if node is root
-    pub fn left_siblings(
+    fn left_siblings(
         &self,
     ) -> Either<
         impl DoubleEndedIterator<Item = CstNode<'a>>,
@@ -673,7 +803,7 @@ impl<'a> CstNode<'a> {
 
     // Iterate over later siblings (In insertion order)
     /// Panics if node is root
-    pub fn right_siblings(
+    fn right_siblings(
         &self,
     ) -> Either<
         impl DoubleEndedIterator<Item = CstNode<'a>>,
@@ -702,13 +832,13 @@ impl<'a> CstNode<'a> {
         }
     }
 
-    pub fn has_errors(&self) -> bool {
+    fn has_errors(&self) -> bool {
         self.me_and_descendants()
             .find_map(|it| it.error())
             .is_some()
     }
 
-    pub fn byte_len(&self) -> usize {
+    fn byte_len(&self) -> usize {
         let end = self.end_pos();
         let start = self.start_pos();
         assert!(end >= start);
@@ -717,15 +847,15 @@ impl<'a> CstNode<'a> {
     }
 
     // Iterate over siblings (In insertion order), skipping ourselves
-    pub fn siblings(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
+    fn siblings(&self) -> impl DoubleEndedIterator<Item = CstNode<'a>> + '_ {
         self.left_siblings().chain(self.right_siblings())
     }
 
-    pub fn ancestors(&self) -> AncestorIter<'a> {
+    fn ancestors(&self) -> AncestorIter<'a> {
         AncestorIter { curr: *self }
     }
 
-    pub fn me_and_descendants(
+    fn me_and_descendants(
         self,
     ) -> Either<
         impl DoubleEndedIterator<Item = CstNode<'a>>,
@@ -764,27 +894,27 @@ impl<'a> CstNode<'a> {
         }
     }
 
-    pub fn is_root(&self) -> bool {
+    fn is_root(&self) -> bool {
         self.fat_id.is_root()
     }
 
-    pub fn is_trivia(&self) -> bool {
+    fn is_trivia(&self) -> bool {
         self.token().is_some_and(|it| it.is_trivia())
     }
 
-    pub fn start_pos(&self) -> usize {
+    fn start_pos(&self) -> usize {
         self.start_pos_configurable(true)
     }
 
-    pub fn start_pos_skip_trivia(&self) -> usize {
+    fn start_pos_skip_trivia(&self) -> usize {
         self.start_pos_configurable(false)
     }
 
-    pub fn end_pos(&self) -> usize {
+    fn end_pos(&self) -> usize {
         self.end_pos_configurable(true)
     }
 
-    pub fn end_pos_skip_trivia(&self) -> usize {
+    fn end_pos_skip_trivia(&self) -> usize {
         self.end_pos_configurable(false)
     }
 
@@ -844,7 +974,7 @@ impl<'a> CstNode<'a> {
             .unwrap_or(self.offset() + self.data.relative_pos)
     }
 
-    pub fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for descendant in self.me_and_descendants().filter(|it| !it.is_trivia()) {
             descendant.print(f, self.fat_id)?;
         }
@@ -852,7 +982,7 @@ impl<'a> CstNode<'a> {
         Ok(())
     }
 
-    pub fn as_str(&self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match &self.data.kind {
             CstNodeDataKind::Tree(tree_kind) => tree_kind.as_str(),
             CstNodeDataKind::Token(tk) => tk.kind.as_str(),
@@ -860,7 +990,7 @@ impl<'a> CstNode<'a> {
         }
     }
 
-    pub fn to_text(&self) -> String {
+    fn to_text(&self) -> String {
         self.me_and_descendants()
             .filter_map(|it| match &it.data.kind {
                 CstNodeDataKind::Token(token) => Some(token.text.as_str()),
@@ -869,7 +999,7 @@ impl<'a> CstNode<'a> {
             .collect()
     }
 
-    pub fn to_text_with_capacity(&self, capacity: usize) -> String {
+    fn to_text_with_capacity(&self, capacity: usize) -> String {
         let mut s = String::with_capacity(capacity);
 
         self.me_and_descendants()
@@ -882,7 +1012,7 @@ impl<'a> CstNode<'a> {
         s
     }
 
-    pub fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result {
+    fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result {
         let mut s = format!("{}", self.data);
 
         if self.fat_id == custom_root {
