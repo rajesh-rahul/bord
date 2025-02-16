@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct SqliteVersion(pub [u16; 3]);
 
 impl SqliteVersion {
