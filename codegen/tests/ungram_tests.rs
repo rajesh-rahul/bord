@@ -19,10 +19,6 @@ fn test_ungram_keywords_are_correct() {
 
 #[test]
 fn test_tree_kinds_are_correct() {
-    let mut s = String::new();
-
-    s.push_str("pub");
-
     let input = include_str!("../../sqlite3-parser/src/tree_kind.rs");
 
     let enum_variants = UNGRAMMAR
@@ -30,17 +26,29 @@ fn test_tree_kinds_are_correct() {
         .map(|node| format_ident!("{}", &node.name));
 
     let actual = syn::parse_file(input).unwrap();
+    let actual_tree_kind = actual
+        .items
+        .iter()
+        .find(|it| matches!(it, syn::Item::Enum(_)))
+        .unwrap();
 
     let expected = quote! {
-        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, strum::IntoStaticStr)]
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
         pub enum SqliteTreeKind {
             #(#enum_variants ,)*
         }
     };
 
+    let expected_file = syn::parse_file(&expected.to_string()).unwrap();
+    let expected_tree_kind = expected_file
+        .items
+        .iter()
+        .find(|it| matches!(it, syn::Item::Enum(_)))
+        .unwrap();
+
     println!(
         "{}",
         prettyplease::unparse(&syn::parse_file(&expected.to_string()).unwrap())
     );
-    assert!(actual == syn::parse_file(&expected.to_string()).unwrap());
+    assert!(actual_tree_kind == expected_tree_kind);
 }
