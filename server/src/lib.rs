@@ -65,20 +65,23 @@ fn did_change_text_document(
         return ControlFlow::Continue(());
     };
 
-    if let Err(err) = doc.apply_changes(version, params.content_changes) {
-        tracing::warn!("{}", err);
-        return ControlFlow::Continue(());
-    }
+    let mod_info = match doc.apply_changes(version, params.content_changes) {
+        Ok(mod_info) => mod_info,
+        Err(err) => {
+            tracing::warn!("{}", err);
+            return ControlFlow::Continue(());
+        }
+    };
 
+    doc.update_errors(mod_info, &server.flycheck_db.lock().unwrap())
+        .unwrap();
     // TODO: TERRIBLE! connection and flycheck need more work
-    let diagnostics = features::perform_diagnostics(&server.flycheck_db.lock().unwrap(), &doc);
-
     if let Err(err) =
         server
             .client
             .notify::<not::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
                 uri: doc_url,
-                diagnostics,
+                diagnostics: doc.errors.iter().flatten().cloned().collect(),
                 version: Some(doc.doc_version),
             })
     {
@@ -95,7 +98,7 @@ fn completion(
     let doc_pos = params.text_document_position;
     let Some(document) = server.vfs.files.get(&doc_pos.text_document.uri) else {
         tracing::warn!(
-            "Recieved completion request for non-existent document: {}",
+            "Received completion request for non-existent document: {}",
             doc_pos.text_document.uri
         );
         return None;
@@ -138,14 +141,14 @@ pub fn router(client: async_lsp::ClientSocket) -> Router<BordLangServer> {
             })
         })
         .notification::<not::Initialized>(|_, _| ControlFlow::Continue(()))
+        .request::<req::Shutdown, _>(|_, _| async move { Ok(()) })
         .notification::<not::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
         .notification::<not::DidOpenTextDocument>(did_open_text_document)
         .notification::<not::DidChangeTextDocument>(did_change_text_document)
-        .request::<req::Completion, _>(|s, p| {
-            let completions = completion(s, p);
-
-            async move { Ok(completions) }
-        })
+        // .request::<req::Completion, _>(|s, p| {
+        //     let completions = completion(s, p);
+        //     async move { Ok(completions) }
+        // })
         .notification::<not::DidCloseTextDocument>(did_close_text_document)
         .unhandled_notification(|_, _| ControlFlow::Continue(()));
 

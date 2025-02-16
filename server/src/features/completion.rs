@@ -2,18 +2,20 @@ use bord_sqlite3_parser::ungram::{
     rule_to_str, Rule, UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind,
     UNGRAMMAR,
 };
-use bord_sqlite3_parser::{CstNode, CstNodeData, SqliteTokenKind, SqliteUntypedCst};
+use bord_sqlite3_parser::{
+    CstNode, CstNodeData, CstNodeDataKind, NodeId, SqliteTokenKind, SqliteUntypedCst,
+};
 use hashbrown::HashSet;
 use itertools::Itertools;
 use line_index::TextSize;
 
-pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize) -> Vec<String> {
+pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize) -> Vec<String> {
     //// Find the token to the left of autocomplete position. We ignore trivial tokens (like whitespace tokens)
-    let mut nodes_iter = ast.nodes().rev();
+    let mut nodes_iter = cst.root().me_and_descendants().rev();
 
-    let Some(mut target) = nodes_iter.find(|it| {
-        it.token()
-            .is_some_and(|it| TextSize::new(it.end()) <= cursor)
+    let Some(mut target) = nodes_iter.find(|it| match it.token() {
+        Some(_) => it.end_pos() <= cursor.into(),
+        None => false,
     }) else {
         return Vec::new();
     };
@@ -29,7 +31,6 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize
 
         target = t;
     }
-    ////
 
     let path_to_target = calculate_path_to_target(&target);
     tracing::info!(?path_to_target);
@@ -64,8 +65,8 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize
     }
 
     // If we didn't hit any special cases, we are ready to walk the grammar tree
-    let mut traverser = UngramTraverser::new(ast.root(), UNGRAMMAR.root());
-    let ancestors_ids: HashSet<_> = target.ancestors().map(|it| it.id).collect();
+    let mut traverser = UngramTraverser::new(cst.root(), UNGRAMMAR.root());
+    let ancestors_ids: HashSet<NodeId> = target.ancestors().map(|it| it.fat_id.into()).collect();
 
     let mut target_rule = None;
 
@@ -78,11 +79,15 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize
             } => match ast_node {
                 Some(
                     node @ CstNode {
-                        data: CstNodeData::Token(_),
+                        data:
+                            CstNodeData {
+                                kind: CstNodeDataKind::Token(_),
+                                ..
+                            },
                         ..
                     },
                 ) if node.as_str() == name.trim_start_matches("KW_") || node.as_str() == "IDEN" => {
-                    if node.id == target.id {
+                    if node.fat_id == target.fat_id {
                         target_rule = Some(rule);
                         break;
                     }
@@ -102,16 +107,20 @@ pub(crate) fn create_completion_context(ast: &SqliteUntypedCst, cursor: TextSize
             } => match ast_node {
                 Some(
                     node @ CstNode {
-                        data: CstNodeData::Tree(_),
+                        data:
+                            CstNodeData {
+                                kind: CstNodeDataKind::Tree(_),
+                                ..
+                            },
                         ..
                     },
                 ) if node.as_str() == name => {
-                    if node.id == target.id {
+                    if node.fat_id == target.fat_id {
                         target_rule = Some(rule);
                         break;
                     }
 
-                    if ancestors_ids.contains(&node.id) {
+                    if ancestors_ids.contains(&node.fat_id) {
                         traverser.node_visited_and_expand_children();
                     } else {
                         traverser.node_visited();

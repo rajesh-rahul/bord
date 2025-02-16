@@ -1,5 +1,6 @@
 use anyhow::format_err;
 use async_lsp::lsp_types as lsp;
+use bord_sqlite3_parser::CstNode;
 use line_index::{LineIndex, TextRange, TextSize, WideLineCol};
 
 /// Convert (line, column) for a particular text document into an offset value from the start
@@ -31,4 +32,36 @@ pub fn text_range(line_index: &LineIndex, range: lsp::Range) -> anyhow::Result<T
         true => Err(format_err!("Invalid Range")),
         false => Ok(TextRange::new(start, end)),
     }
+}
+
+pub fn lsp_range(line_index: &LineIndex, range: TextRange) -> anyhow::Result<lsp::Range> {
+    let start_pos = line_index
+        .try_line_col(range.start())
+        .ok_or_else(|| format_err!("range start cannot be converted to LineCol"))?;
+
+    let end_pos = line_index
+        .try_line_col(range.end())
+        .ok_or_else(|| format_err!("range end cannot be converted to LineCol"))?;
+
+    let start = lsp::Position {
+        line: start_pos.line,
+        character: start_pos.col,
+    };
+
+    let end = lsp::Position {
+        line: end_pos.line,
+        character: end_pos.col + 1,
+    };
+
+    Ok(lsp::Range { start, end })
+}
+
+pub fn node_lsp_range<'a>(
+    line_index: &LineIndex,
+    node: &CstNode<'a>,
+) -> anyhow::Result<lsp::Range> {
+    let start: u32 = node.start_pos_skip_trivia().try_into()?;
+    let end: u32 = node.end_pos_skip_trivia().try_into()?;
+
+    lsp_range(line_index, TextRange::new(start.into(), end.into()))
 }
