@@ -1,4 +1,4 @@
-use crate::{CstNode, CstNodeData};
+use crate::CstNode;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 pub use ungrammar::{Node, NodeData, Rule, Token, TokenData};
@@ -396,13 +396,7 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(
-            self.ast_stack.pop(),
-            Some(CstNode {
-                data: CstNodeData::Token(_),
-                ..
-            })
-        ) {
+        if !self.ast_stack.pop().and_then(|it| it.token()).is_some() {
             panic!("DEV ERROR: API Misuse")
         }
     }
@@ -421,13 +415,7 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(
-            self.ast_stack.pop(),
-            Some(CstNode {
-                data: CstNodeData::Error(_),
-                ..
-            })
-        ) {
+        if !self.ast_stack.pop().and_then(|it| it.error()).is_some() {
             panic!("DEV ERROR: API Misuse")
         }
     }
@@ -440,13 +428,7 @@ impl<'a> UngramTraverser<'a> {
             panic!("DEV ERROR: API Misuse")
         }
 
-        if !matches!(
-            self.ast_stack.pop(),
-            Some(CstNode {
-                data: CstNodeData::Error(_),
-                ..
-            })
-        ) {
+        if !self.ast_stack.pop().and_then(|it| it.error()).is_some() {
             panic!("DEV ERROR: API Misuse")
         }
     }
