@@ -1,5 +1,7 @@
 use crate::cursor::LexCursor;
-use crate::{sqlite_keywords, SqliteToken, SqliteTokenKind, SqliteVersion, MAX_KEYWORD_LEN};
+use crate::{
+    sqlite_keywords, LexError, SqliteToken, SqliteTokenKind, SqliteVersion, MAX_KEYWORD_LEN,
+};
 
 use SqliteTokenKind::*;
 
@@ -9,17 +11,10 @@ const DECI_RADIX: u32 = 10;
 /// Hexadecimal number system which is base 16
 const HEXA_RADIX: u32 = 16;
 
-#[derive(Debug)]
-pub struct LexError {
-    pub message: &'static str,
-    pub token_idx: usize,
-}
-
+#[derive(Clone)]
 pub struct SqliteLexer<'a> {
     cursor: LexCursor<'a>,
     version: SqliteVersion,
-    tokens: Vec<SqliteToken>,
-    errors: Vec<LexError>,
 }
 
 impl<'a> Iterator for SqliteLexer<'a> {
@@ -27,42 +22,30 @@ impl<'a> Iterator for SqliteLexer<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_token() {
-            token @ SqliteToken {
+            SqliteToken {
                 kind: SqliteTokenKind::EOF,
                 ..
-            } => Some(token),
-            _ => None,
+            } => None,
+            token => Some(token),
         }
     }
 }
 
-impl<'input> SqliteLexer<'input> {
-    pub fn new(input: &'input str, version: SqliteVersion) -> SqliteLexer {
+impl SqliteLexer<'_> {
+    pub fn new(input: &str, version: SqliteVersion) -> SqliteLexer<'_> {
         SqliteLexer {
             cursor: LexCursor::new(input),
             version,
-            tokens: Vec::with_capacity(100),
-            errors: Vec::new(),
         }
     }
 
-    pub fn lex(mut self) -> (Vec<SqliteToken>, Vec<LexError>) {
-        loop {
-            match self.next_token() {
-                SqliteToken {
-                    kind: SqliteTokenKind::EOF,
-                    ..
-                } => break,
-                token => self.tokens.push(token),
-            }
-        }
-
-        (self.tokens, self.errors)
+    pub fn lex(self) -> Vec<SqliteToken> {
+        self.into_iter().collect()
     }
 
     fn next_token(&mut self) -> SqliteToken {
         let Some(first) = self.cursor.first() else {
-            return SqliteToken::new(SqliteTokenKind::EOF, "", self.cursor.abs_position);
+            return SqliteToken::new(SqliteTokenKind::EOF, "", None);
         };
 
         // token is 3-tuple long because that's our longest 'fixed' token
@@ -120,7 +103,7 @@ impl<'input> SqliteLexer<'input> {
             (c, ..) if is_identifier_start(c) => self.process_keyword_or_identifier(),
 
             // TODO: Special characters should have different error token behaviour?
-            _ => self.build_error_token("Unknown token", true),
+            _ => self.build_error_token(LexError::UnknownToken, true),
         }
     }
 
@@ -148,9 +131,9 @@ impl<'input> SqliteLexer<'input> {
             }
         }
 
-        let (data, abs_pos) = self.cursor.build_token_info();
+        let data = self.cursor.build_token_text();
 
-        SqliteToken::new(SqliteTokenKind::S_LINE_COMMENT, data, abs_pos)
+        SqliteToken::new(SqliteTokenKind::S_LINE_COMMENT, data, None)
     }
 
     fn process_keyword_or_identifier(&mut self) -> SqliteToken {
@@ -248,7 +231,7 @@ impl<'input> SqliteLexer<'input> {
         }
 
         if !is_terminated {
-            return self.build_error_token("String literal not terminated", false);
+            return self.build_error_token(LexError::UnterminatedStringLiteral, false);
         } else {
             self.build_token(SqliteTokenKind::STR_LIT)
         }
@@ -277,7 +260,7 @@ impl<'input> SqliteLexer<'input> {
         }
 
         if !is_terminated {
-            return self.build_error_token("Quoted identifier not terminated", false);
+            return self.build_error_token(LexError::UnterminatedQuotedIdentifier, false);
         } else {
             self.build_token(SqliteTokenKind::IDEN)
         }
@@ -329,7 +312,7 @@ impl<'input> SqliteLexer<'input> {
             .is_some_and(|c| !is_separate_token_start(c) && !c.is_whitespace())
         {
             // We borrow postgres's error message here
-            return self.build_error_token("Trailing junk after numeric literal", true);
+            return self.build_error_token(LexError::TrailingJunkAfterNumericLiteral, true);
         }
 
         if has_decimal_point {
@@ -367,33 +350,28 @@ impl<'input> SqliteLexer<'input> {
         }
 
         if !terminated {
-            return self.build_error_token("Unterminated blob literal", false);
+            return self.build_error_token(LexError::UnterminatedBlobLiteral, false);
         } else if (blob_lit_len % 2 != 0) || is_malformed {
-            return self.build_error_token("Malformed blob literal", false);
+            return self.build_error_token(LexError::MalformedBlobLiteral, false);
         } else {
             return self.build_token(BLOB_LIT);
         }
     }
 
     fn build_token(&mut self, token_kind: SqliteTokenKind) -> SqliteToken {
-        let (text, abs_pos) = self.cursor.build_token_info();
+        let text = self.cursor.build_token_text();
 
-        SqliteToken::new(token_kind, text, abs_pos)
+        SqliteToken::new(token_kind, text, None)
     }
 
     /// `consume` variable tells us if we should continue consuming characters to reach the
     /// beginnning of next token before building the error token or to build it right away.
-    fn build_error_token(&mut self, hint: &'static str, consume: bool) -> SqliteToken {
-        let (data, abs_pos) = self.cursor.build_error_token_info(|ch| {
+    fn build_error_token(&mut self, error: LexError, consume: bool) -> SqliteToken {
+        let data = self.cursor.build_error_token_info(|ch| {
             !is_separate_token_start(ch) && !ch.is_whitespace() && consume
         });
 
-        self.errors.push(LexError {
-            message: hint,
-            token_idx: self.tokens.len(), // TODO: Not good
-        });
-
-        SqliteToken::new(SqliteTokenKind::ERROR, data, abs_pos)
+        SqliteToken::new(SqliteTokenKind::ERROR, data, Some(error))
     }
 }
 
@@ -435,7 +413,7 @@ macro_rules! check {
     ($input:expr, $token_pat:pat) => {
         let lexer = SqliteLexer::new($input, SqliteVersion([3, 46, 0]));
 
-        let (tokens_fat, _) = lexer.lex();
+        let tokens_fat = lexer.lex();
 
         let tokens = tokens_fat.iter().map(|t| t.kind).collect::<Vec<_>>();
 
@@ -507,7 +485,7 @@ fn can_lex_integer_literal() {
     check!("1e1<2.", [INT_LIT, L_CHEV, REAL_LIT]);
     check!("1$1", [ERROR, INT_LIT]); // TODO: Not sure how to match SQLite's behaviour here
     check!("1^1", [INT_LIT, ERROR, INT_LIT]);
-    check!("1`1", [INT_LIT, ERROR, INT_LIT]);
+    check!("1`1", [INT_LIT, ERROR]);
     check!("1+~1", [INT_LIT, PLUS, TILDA, INT_LIT]);
     check!("1!", [INT_LIT, ERROR]);
     check!("1m", [ERROR]);
