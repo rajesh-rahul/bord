@@ -1,42 +1,49 @@
 //! Initally based on: https://github.com/mamcx/tree-flat
 
 use itertools::{Either, Itertools};
+use text_size::TextSize;
 use tinyvec::TinyVec;
 
 use super::*;
 use crate::{parser::ParseErrorKind, SqliteTokenKind, SqliteTreeKind, T};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct BranchId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct NodeId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct FatId {
+    branch_id: BranchId,
+    id: NodeId,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct IncrCstNode<'a> {
-    pub fat_id: NodeId,
-    pub data: &'a CstNodeData,
-    pub cst: &'a IncrSqlCst,
+    fat_id: FatId,
+    data: &'a CstNodeData,
+    cst: &'a IncrSqlCst,
 }
 
 #[derive(Debug)]
 pub struct IncrCstMut<'a> {
-    pub fat_id: NodeId,
-    pub parent: Option<usize>,
-    pub cst: &'a mut IncrSqlCst,
+    fat_id: FatId,
+    parent: Option<NodeId>,
+    cst: &'a mut IncrSqlCst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeId {
-    pub branch_id: usize,
-    pub id: usize,
-}
-
-impl NodeId {
-    pub const fn new(branch_id: usize, id: usize) -> NodeId {
-        NodeId { branch_id, id }
+impl FatId {
+    pub const fn new(branch_id: BranchId, id: NodeId) -> FatId {
+        FatId { branch_id, id }
     }
 
     pub const fn is_root(&self) -> bool {
         matches!(
             self,
-            NodeId {
-                branch_id: 0,
-                id: 0
+            FatId {
+                branch_id: BranchId(0),
+                id: NodeId(0)
             }
         )
     }
@@ -44,10 +51,11 @@ impl NodeId {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IncrSqlCst {
-    pub(crate) branches: Vec<CstBranch>,
-    pub(crate) branch_positions: Vec<usize>,
-    pub(crate) byte_len: usize,
-    pub(crate) abs_pos: usize,
+    // TODO: Switch to linkedlist slotmap
+    branches: Vec<CstBranch>,
+    branch_positions: Vec<TextSize>,
+    byte_len: TextSize,
+    abs_pos: TextSize,
 }
 
 mod private {
@@ -58,8 +66,8 @@ mod private {
         Token(CstNodeData),
         Tree {
             data: Vec<CstNodeData>,
-            parents: Vec<Option<usize>>,
-            children: Vec<TinyVec<[usize; 4]>>,
+            parents: Vec<Option<NodeId>>,
+            children: Vec<TinyVec<[NodeId; 8]>>,
         },
     }
 
@@ -88,7 +96,7 @@ mod private {
         pub fn root_branch() -> CstBranch {
             CstBranch::Tree {
                 data: vec![CstNodeData {
-                    relative_pos: 0,
+                    relative_pos: TextSize::new(0),
                     kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
                 }],
                 parents: Vec::new(),
@@ -112,7 +120,7 @@ mod private {
             }
         }
 
-        pub fn push_child(&mut self, parent: usize, node_data: CstNodeData) -> usize {
+        pub fn push_child(&mut self, parent: NodeId, node_data: CstNodeData) -> NodeId {
             assert!(!self.is_root_branch());
 
             match self {
@@ -122,7 +130,7 @@ mod private {
                     parents,
                     children,
                 } => {
-                    let child_idx = data.len();
+                    let child_idx = NodeId::new(data.len());
 
                     data.push(node_data);
                     parents.push(Some(parent));
@@ -134,28 +142,30 @@ mod private {
             }
         }
 
-        pub fn parent(&self, id: usize) -> Option<usize> {
+        #[inline(always)]
+        pub fn parent(&self, id: NodeId) -> Option<NodeId> {
             if self.is_root_branch() {
                 panic!("Root node do not have parent")
             } else {
                 match self {
                     CstBranch::Token(_) => None,
-                    CstBranch::Tree { parents, .. } => parents.get(id).and_then(|it| *it),
+                    CstBranch::Tree { parents, .. } => parents[id],
                 }
             }
         }
 
-        pub fn data(&self, id: usize) -> &CstNodeData {
+        #[inline(always)]
+        pub fn data(&self, id: NodeId) -> &CstNodeData {
             match self {
                 CstBranch::Token(data) => {
-                    assert!(id == 0);
+                    assert!(id == NodeId(0));
                     &data
                 }
                 CstBranch::Tree { data, .. } => &data[id],
             }
         }
 
-        pub fn children_slice(&self, id: usize) -> &[usize] {
+        pub fn children_slice(&self, id: NodeId) -> &[NodeId] {
             if self.is_root_branch() {
                 panic!("Root branch do not directly store children")
             } else {
@@ -170,22 +180,23 @@ mod private {
 pub use private::*;
 
 impl IncrSqlCst {
-    fn push_cst_branch(&mut self, data: CstNodeData, capacity: usize) -> NodeId {
+    fn push_cst_branch(&mut self, data: CstNodeData, capacity: usize) -> FatId {
         let branch_id = self.branches.len();
         self.branches.push(CstBranch::with_capacity(data, capacity));
 
         self.branch_positions.push(self.byte_len);
-        // self.branches[0].children[0].push(branch_id);
 
-        NodeId::new(branch_id, 0)
+        FatId::new(BranchId::new(branch_id), NodeId::new(0))
     }
 
-    fn push_child(&mut self, branch_id: usize, parent: usize, data: CstNodeData) -> NodeId {
-        assert!(branch_id < self.branches.len());
+    fn branch_root<'a>(&'a self, branch_id: BranchId) -> IncrCstNode<'a> {
+        self.node(branch_id, NodeId(0))
+    }
 
+    fn push_child(&mut self, branch_id: BranchId, parent: NodeId, data: CstNodeData) -> FatId {
         let child_id = self.branches[branch_id].push_child(parent, data);
 
-        NodeId::new(branch_id, child_id)
+        FatId::new(branch_id, child_id)
     }
 
     pub fn num_branches(&self) -> usize {
@@ -196,39 +207,31 @@ impl IncrSqlCst {
         branch_id < self.num_branches() && branch_id > 0
     }
 
-    fn node_mut<'a>(&'a mut self, NodeId { branch_id, id }: NodeId) -> IncrCstMut<'a> {
-        assert!(branch_id < self.branches.len());
-        assert!(id < self.branches[branch_id].len());
-
-        let parent = self.branches[branch_id].parent(id);
-
+    #[inline(always)]
+    fn node_mut<'a>(&'a mut self, fat_id: FatId) -> IncrCstMut<'a> {
         IncrCstMut {
-            fat_id: NodeId::new(branch_id, id),
-            parent,
+            fat_id,
+            parent: self.branches[fat_id.branch_id].parent(fat_id.id),
             cst: self,
         }
     }
 
-    pub fn node<'a>(&'a self, NodeId { branch_id, id }: NodeId) -> IncrCstNode<'a> {
-        assert!(branch_id < self.branches.len());
-        assert!(id < self.branches[branch_id].len());
-
-        let data = self.branches[branch_id].data(id);
-
+    #[inline(always)]
+    pub fn node<'a>(&'a self, branch_id: BranchId, id: NodeId) -> IncrCstNode<'a> {
         IncrCstNode {
-            fat_id: NodeId::new(branch_id, id),
-            data,
+            fat_id: FatId::new(branch_id, id),
+            data: self.branches[branch_id].data(id),
             cst: self,
         }
     }
 
-    pub fn updated_text_patch(&self, patch: TextPatch<(), ()>) -> TextPatch<usize, usize> {
-        let find_node_with_pos = |pos: usize| {
+    pub fn updated_text_patch(&self, patch: TextPatch<(), ()>) -> TextPatch<TextSize, TextSize> {
+        let find_node_with_pos = |pos: TextSize| {
             let p_point = self.branch_positions[1..].partition_point(|it| *it < pos) + 1;
             if self.has_branch(p_point) && self.branch_positions[p_point] == pos {
-                return Some(self.node(NodeId::new(p_point, 0)));
+                return Some(self.branch_root(BranchId::new(p_point)));
             } else if self.has_branch(p_point - 1) {
-                return Some(self.node(NodeId::new(p_point - 1, 0)));
+                return Some(self.branch_root(BranchId::new(p_point - 1)));
             } else {
                 return None;
             }
@@ -241,7 +244,7 @@ impl IncrSqlCst {
                     .find(|it| it.token_kind() == Some(T![;]))
             })
             .map(|it| it.end_pos())
-            .unwrap_or(0);
+            .unwrap_or(0.into());
 
         let affected_node_byte_len = match patch {
             TextPatch {
@@ -250,11 +253,13 @@ impl IncrSqlCst {
                 ..
             } => find_node_with_pos(start)
                 .map(|it| it.byte_len())
-                .unwrap_or(0),
+                .unwrap_or(0.into()),
             TextPatch {
                 kind: TextPatchKind::Replace { end },
                 ..
-            } => find_node_with_pos(end).map(|it| it.byte_len()).unwrap_or(0),
+            } => find_node_with_pos(end)
+                .map(|it| it.byte_len())
+                .unwrap_or(0.into()),
         };
 
         TextPatch {
@@ -269,8 +274,13 @@ impl IncrSqlCst {
     pub fn merge_cst(
         &mut self,
         new_cst: IncrSqlCst,
-        patch: TextPatch<usize, usize>,
+        patch: TextPatch<TextSize, TextSize>,
     ) -> ModifiedBranchesInfo {
+        enum GrowSize {
+            Pos(TextSize),
+            Neg(TextSize),
+        }
+
         let (start, end, grow_size) = {
             let TextPatch {
                 relex_start,
@@ -294,16 +304,39 @@ impl IncrSqlCst {
                 TextPatchKind::Insert => {
                     let end_text_pos = start + spillover;
 
-                    (size as isize, end_text_pos)
+                    (GrowSize::Pos(size), end_text_pos)
                 }
                 TextPatchKind::Replace { end } => {
                     // NOTE: size is not the same as `end - start`. `size` is the length of
                     // the new text and `end - start` represents the length of the text its
                     // replacing
-                    let delta = (size as isize) - (end - start) as isize;
+                    let new_size = size;
+                    let old_size = end - start;
+
+                    let grow_size = if new_size >= old_size {
+                        GrowSize::Pos(new_size - old_size)
+                    } else {
+                        let diff = u32::from(new_size).abs_diff(old_size.into());
+                        GrowSize::Neg(diff.into())
+                    };
+
                     let end_text_pos = end + spillover;
 
-                    (delta, end_text_pos)
+                    (grow_size, end_text_pos)
+                }
+            };
+
+            let is_affected = |idx: usize| {
+                if self.branch_positions[idx] < end_text_pos {
+                    true
+                } else if self.branch_positions[idx] == end_text_pos {
+                    let curr_branch = self.branch_root(BranchId::new(idx));
+
+                    curr_branch
+                        .error()
+                        .is_some_and(|err| err.is_missing_semicolon_err())
+                } else {
+                    false
                 }
             };
 
@@ -311,8 +344,10 @@ impl IncrSqlCst {
                 self.branch_positions[1..].partition_point(|&it| it < end_text_pos) + 1; // TODO: is <= correct?
 
             while affected_end < self.branches.len()
-                && self.branches[affected_end].len() == 1
-                && !matches!(self.branches[affected_end], CstBranch::Token(_))
+                && self
+                    .branch_root(BranchId::new(affected_end))
+                    .error()
+                    .is_some_and(|err| err.is_missing_semicolon_err())
             {
                 affected_end += 1
             }
@@ -325,22 +360,30 @@ impl IncrSqlCst {
             num_new_branches: new_cst.num_branches(),
         };
 
-        self.byte_len = self
-            .byte_len
-            .checked_add_signed(grow_size)
-            .expect("byte_len is always positive");
+        match grow_size {
+            GrowSize::Pos(ts) => self.byte_len += ts,
+            GrowSize::Neg(ts) => self.byte_len -= ts,
+        }
 
         self.branch_positions[end..].iter_mut().for_each(|it| {
-            *it = it
-                .checked_add_signed(grow_size)
-                .expect("Expected addition to be >= 0")
+            // TODO: Use saturating add?
+            match grow_size {
+                GrowSize::Pos(ts) => *it += ts,
+                GrowSize::Neg(ts) => *it -= ts,
+            }
+            // *it = it.saturating_add_signed(grow_size);
         });
 
+        let start_T = std::time::Instant::now();
         self.branch_positions
             .splice(start..end, new_cst.branch_positions.into_iter().skip(1));
 
         self.branches
             .splice(start..end, new_cst.branches.into_iter().skip(1));
+        eprintln!("splce time: {}", start_T.elapsed().as_micros());
+
+        self.branches.shrink_to_fit();
+        self.branches.shrink_to_fit();
 
         modified_info
     }
@@ -354,12 +397,12 @@ impl CstTrait for IncrSqlCst {
         true
     }
 
-    fn with_capacity(abs_pos: usize, _capacity: usize) -> Self {
+    fn with_capacity(abs_pos: TextSize, _capacity: usize) -> Self {
         let mut branches = Vec::with_capacity(10);
         let mut branch_positions = Vec::with_capacity(10);
         // First branch is a special branch that belongs to the root
         branches.push(CstBranch::root_branch());
-        branch_positions.push(0);
+        branch_positions.push(TextSize::new(0));
 
         IncrSqlCst {
             branches,
@@ -369,9 +412,10 @@ impl CstTrait for IncrSqlCst {
         }
     }
 
+    #[inline(always)]
     fn root_mut<'a>(&'a mut self) -> IncrCstMut<'a> {
         IncrCstMut {
-            fat_id: NodeId::new(0, 0),
+            fat_id: FatId::new(BranchId(0), NodeId(0)),
             parent: None,
             cst: self,
         }
@@ -380,11 +424,11 @@ impl CstTrait for IncrSqlCst {
     fn root<'a>(&'a self) -> IncrCstNode<'a> {
         static ROOT: CstNodeData = CstNodeData {
             kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
-            relative_pos: 0,
+            relative_pos: TextSize::new(0),
         };
 
         IncrCstNode {
-            fat_id: NodeId::new(0, 0),
+            fat_id: FatId::new(BranchId(0), NodeId(0)),
             data: &ROOT,
             cst: self,
         }
@@ -392,11 +436,11 @@ impl CstTrait for IncrSqlCst {
 }
 
 impl IncrCstMut<'_> {
-    fn append(&mut self, kind: CstNodeDataKind, capacity: usize) -> NodeId {
+    fn append(&mut self, kind: CstNodeDataKind, capacity: usize) -> FatId {
         if self.fat_id.is_root() {
             self.cst.push_cst_branch(
                 CstNodeData {
-                    relative_pos: 0,
+                    relative_pos: TextSize::new(0),
                     kind,
                 },
                 capacity,
@@ -415,31 +459,34 @@ impl IncrCstMut<'_> {
     }
 }
 impl<'a> CstMutTrait<'a> for IncrCstMut<'a> {
+    #[inline(always)]
     fn parent_mut(self) -> IncrCstMut<'a> {
         if self.fat_id.is_root() {
             panic!("Root node do not have parent")
         }
 
         if let Some(parent) = self.parent {
-            self.cst
-                .node_mut(NodeId::new(self.fat_id.branch_id, parent))
+            self.cst.node_mut(FatId::new(self.fat_id.branch_id, parent))
         } else {
             self.cst.root_mut()
         }
     }
 
+    #[inline(always)]
     fn push_tree(mut self, tree: SqliteTreeKind, capacity: usize) -> IncrCstMut<'a> {
         let fat_id = self.append(CstNodeDataKind::Tree(tree), capacity);
 
         self.cst.node_mut(fat_id)
     }
 
+    #[inline(always)]
     fn push_token(&mut self, token: SqliteToken) {
-        let byte_len_to_add = token.text.len();
+        let byte_len_to_add = token.text_len();
         let _ = self.append(CstNodeDataKind::Token(token), 1);
         self.cst.byte_len += byte_len_to_add;
     }
 
+    #[inline(always)]
     fn push_error(mut self, error: ParseErrorKind, capacity: usize) -> IncrCstMut<'a> {
         let fat_id = self.append(CstNodeDataKind::Error(error), capacity);
 
@@ -448,56 +495,7 @@ impl<'a> CstMutTrait<'a> for IncrCstMut<'a> {
 }
 
 impl<'a> IncrCstNode<'a> {
-    fn print_subtree(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for descendant in self.me_and_descendants().filter(|it| !it.is_trivia()) {
-            descendant.print(f, self.fat_id)?;
-        }
-
-        Ok(())
-    }
-
-    fn print(&self, f: &mut std::fmt::Formatter<'_>, custom_root: NodeId) -> std::fmt::Result {
-        let mut s = format!("{}", self.data);
-
-        if self.fat_id == custom_root {
-            return writeln!(f, "{s}({}..{})", self.start_pos(), self.end_pos());
-        }
-
-        let parent_id = self.parent().fat_id;
-        let last_non_triv_child_id =
-            |node: IncrCstNode| node.non_trivial_children().last().map(|it| it.fat_id);
-
-        for ancestor in self.ancestors() {
-            if ancestor.fat_id == parent_id {
-                let start = self.start_pos();
-                let end = self.end_pos();
-
-                if last_non_triv_child_id(ancestor) == Some(self.fat_id) {
-                    s = format!("└───{s}({start}..{end})");
-                } else {
-                    s = format!("├───{s}({start}..{end})");
-                }
-            } else {
-                match last_non_triv_child_id(ancestor) {
-                    Some(fat_id)
-                        if fat_id.branch_id > self.fat_id.branch_id
-                            || fat_id.id > self.fat_id.id =>
-                    {
-                        s = format!("├   {s}")
-                    }
-                    _ => s = format!("    {s}"),
-                }
-            }
-
-            if ancestor.fat_id == custom_root {
-                break;
-            }
-        }
-
-        return writeln!(f, "{s}");
-    }
-
-    fn offset(&self) -> usize {
+    fn offset(&self) -> TextSize {
         self.cst.branch_positions[self.fat_id.branch_id]
     }
 
@@ -507,7 +505,7 @@ impl<'a> IncrCstNode<'a> {
     /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
     // NOTE: We can also implement this by recursively calling start_pos on the first child
     // until we find a token node - but this gotta be faster
-    fn start_pos_configurable(&self, allow_trivial: bool) -> usize {
+    fn start_pos_configurable(&self, allow_trivial: bool) -> TextSize {
         // let is_root = self.is_root();
         // let offset = self.cst.branch_positions[self.fat_id.branch_id];
         // // let start_pos = |node: CstNode| match &node.data.kind {
@@ -539,14 +537,14 @@ impl<'a> IncrCstNode<'a> {
     ///
     /// This may not be desired in cases such as when we need to show error squiggly lines
     /// in the editor - having the squiggly line extend past text and into whitespace is unsightly
-    fn end_pos_configurable(&self, allow_trivial: bool) -> usize {
+    fn end_pos_configurable(&self, allow_trivial: bool) -> TextSize {
         self.me_and_descendants()
             .rev()
             .skip_while(|it| !allow_trivial && it.is_trivia())
             .next()
             .map(|it| {
                 if let Some(tk) = it.token() {
-                    it.offset() + it.data.relative_pos + tk.text.len()
+                    it.offset() + it.data.relative_pos + tk.text_len()
                 } else {
                     it.offset() + it.data.relative_pos
                 }
@@ -555,21 +553,29 @@ impl<'a> IncrCstNode<'a> {
     }
 }
 impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
+    type Id = FatId;
+
+    #[inline(always)]
     fn data(&self) -> &'a CstNodeData {
         &self.data
     }
 
+    #[inline(always)]
+    fn id(&self) -> Self::Id {
+        self.fat_id
+    }
+
     fn parent(self) -> IncrCstNode<'a> {
-        let NodeId { branch_id, id } = self.fat_id.into();
+        let FatId { branch_id, id } = self.fat_id.into();
 
         match self.cst.branches[branch_id].parent(id) {
-            Some(parent) => self.cst.node(NodeId::new(branch_id, parent)),
+            Some(parent) => self.cst.node(branch_id, parent),
             None => self.cst.root(),
         }
     }
 
     fn children(self) -> impl DoubleEndedIterator<Item = IncrCstNode<'a>> {
-        let NodeId { branch_id, id } = self.fat_id.into();
+        let FatId { branch_id, id } = self.fat_id;
 
         if self.fat_id.is_root() {
             Either::Left(
@@ -578,7 +584,7 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                     .iter()
                     .enumerate()
                     .skip(1)
-                    .map(|(branch_id, _)| self.cst.node(NodeId::new(branch_id, 0))),
+                    .map(|(branch_id, _)| self.cst.branch_root(BranchId::new(branch_id))),
             )
         } else {
             Either::Right(
@@ -586,7 +592,7 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                     .children_slice(id)
                     .iter()
                     .copied()
-                    .map(move |child_id| self.cst.node(NodeId::new(branch_id, child_id))),
+                    .map(move |child_id| self.cst.node(branch_id, child_id)),
             )
         }
     }
@@ -594,12 +600,12 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
     // Iterate over earlier siblings (In insertion order)
     /// Panics if node is root
     fn left_siblings(&self) -> impl DoubleEndedIterator<Item = IncrCstNode<'a>> {
-        let parent: NodeId = self.parent().fat_id;
+        let parent: FatId = self.parent().fat_id;
 
         if parent.is_root() {
             Either::Left(
-                (1..self.fat_id.branch_id)
-                    .map(|branch_id| self.cst.node(NodeId::new(branch_id, 0))),
+                (1..usize::from(self.fat_id.branch_id))
+                    .map(|branch_id| self.cst.branch_root(BranchId::new(branch_id))),
             )
         } else {
             let parent_children = &self.cst.branches[parent.branch_id].children_slice(parent.id);
@@ -612,7 +618,7 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                 // NOTE: This indexing will not panic because in Rust `list.len()..` returns empty slice
                 parent_children[..idx]
                     .iter()
-                    .map(move |&id| self.cst.node(NodeId::new(parent.branch_id, id))),
+                    .map(move |&id| self.cst.node(parent.branch_id, id)),
             )
         }
     }
@@ -620,12 +626,12 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
     // Iterate over later siblings (In insertion order)
     /// Panics if node is root
     fn right_siblings(&self) -> impl DoubleEndedIterator<Item = IncrCstNode<'a>> {
-        let parent: NodeId = self.parent().fat_id;
+        let parent: FatId = self.parent().fat_id;
 
         if parent.is_root() {
             Either::Left(
-                (self.fat_id.branch_id + 1..self.cst.num_branches())
-                    .map(|branch_id| self.cst.node(NodeId::new(branch_id, 0))),
+                (usize::from(self.fat_id.branch_id) + 1..self.cst.num_branches())
+                    .map(|branch_id| self.cst.branch_root(BranchId::new(branch_id))),
             )
         } else {
             let parent_children = &self.cst.branches[parent.branch_id].children_slice(parent.id);
@@ -638,7 +644,7 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                 // NOTE: This indexing will not panic because in Rust `list.len()..` returns empty slice
                 parent_children[idx + 1..]
                     .iter()
-                    .map(move |&id| self.cst.node(NodeId::new(parent.branch_id, id))),
+                    .map(move |&id| self.cst.node(parent.branch_id, id)),
             )
         }
     }
@@ -649,18 +655,18 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                 std::iter::once(self.cst.root()).chain(self.children().flat_map(move |it| {
                     let branch_id = it.fat_id.branch_id;
                     (0..it.cst.branches[branch_id].len())
-                        .map(move |id| self.cst.node(NodeId::new(branch_id, id)))
+                        .map(move |id| self.cst.node(branch_id, NodeId::new(id)))
                 })),
             )
         } else {
-            let NodeId { branch_id, id } = self.fat_id;
+            let FatId { branch_id, id } = self.fat_id;
 
             let end = if self.parent().is_root() {
                 self.cst.branches[branch_id].len()
             } else {
                 // An optimization if we have right sibling
                 if let Some(sibling) = self.right_siblings().next() {
-                    sibling.fat_id.id
+                    sibling.fat_id.id.into()
                 } else {
                     let mut last_descendant = self;
 
@@ -668,13 +674,13 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
                         last_descendant = descendant;
                     }
 
-                    last_descendant.fat_id.id + 1
+                    usize::from(last_descendant.fat_id.id) + 1
                 }
             };
 
-            let start = id;
+            let start = id.into();
             // NOTE: if start is greater than end, we will get an empty iterator
-            Either::Right((start..end).map(move |id| self.cst.node(NodeId::new(branch_id, id))))
+            Either::Right((start..end).map(move |id| self.cst.node(branch_id, NodeId::new(id))))
         }
     }
 
@@ -682,19 +688,19 @@ impl<'a> CstNodeTrait<'a> for IncrCstNode<'a> {
         self.fat_id.is_root()
     }
 
-    fn start_pos(&self) -> usize {
+    fn start_pos(&self) -> TextSize {
         self.start_pos_configurable(true)
     }
 
-    fn start_pos_skip_trivia(&self) -> usize {
+    fn start_pos_skip_trivia(&self) -> TextSize {
         self.start_pos_configurable(false)
     }
 
-    fn end_pos(&self) -> usize {
+    fn end_pos(&self) -> TextSize {
         self.end_pos_configurable(true)
     }
 
-    fn end_pos_skip_trivia(&self) -> usize {
+    fn end_pos_skip_trivia(&self) -> TextSize {
         self.end_pos_configurable(false)
     }
 }
@@ -713,16 +719,72 @@ impl std::fmt::Display for IncrCstNode<'_> {
 
 impl std::fmt::Debug for IncrSqlCst {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (idx, branch) in self.branches.iter().enumerate() {
+        for (branch_id, branch) in self.branches.iter().enumerate() {
             writeln!(
                 f,
                 "{} -> [{}]",
-                self.branch_positions[idx],
-                (0..branch.len()).map(|idx| branch.data(idx)).join(", ")
+                u32::from(self.branch_positions[branch_id]),
+                (0..branch.len())
+                    .map(|id| branch.data(NodeId::new(id)))
+                    .join(", ")
             )?;
         }
-        writeln!(f, "byte_len: {}", self.byte_len)?;
+        writeln!(f, "byte_len: {}", u32::from(self.byte_len))?;
         writeln!(f, "positions: {:?}", self.branch_positions)?;
         Ok(())
+    }
+}
+
+macro_rules! derive_index {
+    ($idx:ty => $($res:ty ,)*) => {
+        $(
+            impl std::ops::Index<$idx> for Vec<$res> {
+                type Output = $res;
+
+                #[inline(always)]
+                fn index(&self, index: $idx) -> &$res {
+                    &self[index.0 as usize]
+                }
+            }
+
+            impl std::ops::IndexMut<$idx> for Vec<$res> {
+                #[inline(always)]
+                fn index_mut(&mut self, index: $idx) -> &mut $res {
+                    &mut self[index.0 as usize]
+                }
+            }
+        )*
+    };
+}
+
+// derive_index!{ NodeId, CstNodeDataKind }
+derive_index! { NodeId => CstNodeData, TinyVec<[NodeId; 8]>, Option<NodeId>,}
+derive_index! { BranchId => CstBranch, TextSize, }
+
+impl From<NodeId> for usize {
+    #[inline(always)]
+    fn from(value: NodeId) -> Self {
+        value.0 as usize
+    }
+}
+
+impl From<BranchId> for usize {
+    #[inline(always)]
+    fn from(value: BranchId) -> Self {
+        value.0 as usize
+    }
+}
+
+impl BranchId {
+    #[inline(always)]
+    pub fn new(idx: usize) -> Self {
+        BranchId(idx as u32)
+    }
+}
+
+impl NodeId {
+    #[inline(always)]
+    pub fn new(idx: usize) -> Self {
+        NodeId(idx as u32)
     }
 }
