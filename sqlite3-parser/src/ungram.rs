@@ -1,4 +1,4 @@
-use crate::CstNode;
+use crate::CstNodeTrait;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 pub use ungrammar::{Node, NodeData, Rule, Token, TokenData};
@@ -55,53 +55,53 @@ impl Ungrammar {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum UngramNode<'a> {
+pub enum UngramNode<T> {
     Rule(&'static ungrammar::Rule),
     RepMarker {
         rule: &'static ungrammar::Rule,
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: CstNode<'a>,
+        ast_stack_item: T,
     },
     AltMarker {
         alt_marker_idx: usize,
         alt_marker_end_idx: usize,
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: CstNode<'a>,
+        ast_stack_item: T,
     },
     OptMarker {
         parent_list_len: usize,
         ast_stack_idx: usize,
-        ast_stack_item: CstNode<'a>,
+        ast_stack_item: T,
     },
     AltItemBegin,
 }
 
-struct FallbackLocation<'a> {
+struct FallbackLocation<T> {
     ungram_stack_len: usize,
     ast_stack_idx: usize,
-    ast_stack_item: CstNode<'a>,
+    ast_stack_item: T,
     node_list_len: usize,
 }
 
-pub struct UngramTraverser<'a> {
-    ast_stack: Vec<CstNode<'a>>,
-    ungram_stack: Vec<UngramNode<'a>>,
+pub struct UngramTraverser<T> {
+    ast_stack: Vec<T>,
+    ungram_stack: Vec<UngramNode<T>>,
     rules_history: Vec<&'static Rule>,
     // ast: &'a SqliteUntypedCst,
 }
 
-pub enum UngramTraverserNodeKind<'a> {
+pub enum UngramTraverserNodeKind<T> {
     Token {
         name: &'static str,
-        ast_node: Option<CstNode<'a>>,
-        rule: &'a Rule,
+        ast_node: Option<T>,
+        rule: &'static Rule,
     },
     Tree {
         name: &'static str,
-        rule: &'a Rule,
-        ast_node: Option<CstNode<'a>>,
+        rule: &'static Rule,
+        ast_node: Option<T>,
     },
 }
 
@@ -111,8 +111,8 @@ pub enum UngramTraverserBacktrackResult {
     Fail,
 }
 
-impl<'a> UngramTraverser<'a> {
-    pub fn new(ast_root: CstNode<'a>, ungram_root: &'static Rule) -> Self {
+impl<'a, T: Copy + CstNodeTrait<'a>> UngramTraverser<T> {
+    pub fn new(ast_root: T, ungram_root: &'static Rule) -> Self {
         let ast_stack = vec![ast_root];
         let ungram_stack = vec![UngramNode::Rule(ungram_root)];
         Self {
@@ -126,15 +126,15 @@ impl<'a> UngramTraverser<'a> {
         &self.rules_history
     }
 
-    pub fn ungram_stack(&self) -> &[UngramNode<'a>] {
+    pub fn ungram_stack(&self) -> &[UngramNode<T>] {
         &self.ungram_stack
     }
 
-    pub fn ast_stack(&self) -> &[CstNode<'a>] {
+    pub fn ast_stack(&self) -> &[T] {
         &self.ast_stack
     }
 
-    pub fn next<'b>(&'b mut self) -> Option<UngramTraverserNodeKind<'a>> {
+    pub fn next(&mut self) -> Option<UngramTraverserNodeKind<T>> {
         while !self.ast_stack.is_empty() || !self.ungram_stack.is_empty() {
             let ungram_node = self.ungram_stack.last();
 
@@ -320,13 +320,13 @@ impl<'a> UngramTraverser<'a> {
             if !self.ast_stack.is_empty() || !self.ungram_stack.is_empty() {
                 self.ast_stack.push(marker.ast_stack_item);
             }
-            return UngramTraverserBacktrackResult::Success;
+            UngramTraverserBacktrackResult::Success
         } else {
-            return UngramTraverserBacktrackResult::Fail;
+            UngramTraverserBacktrackResult::Fail
         }
     }
 
-    fn find_fallback_marker(&mut self) -> Option<FallbackLocation<'a>> {
+    fn find_fallback_marker(&mut self) -> Option<FallbackLocation<T>> {
         for (idx, node) in self.ungram_stack.iter_mut().enumerate().rev() {
             match node {
                 UngramNode::RepMarker {

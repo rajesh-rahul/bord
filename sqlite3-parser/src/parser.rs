@@ -1,19 +1,19 @@
 use std::cell::Cell;
 
 use enumset::EnumSet;
+use text_size::TextSize;
 
 use crate::{
     grammar::common::{
         EXPR_BIND_PARAM_START, EXPR_LIT_START, EXPR_PREFIX_START, IDEN_SET, JOIN_KEYWORDS,
     },
-    SqliteLexer, SqliteToken, SqliteTokenKind, SqliteTreeKind, SqliteUntypedCst, SqliteVersion,
+    CstTrait, SqliteLexer, SqliteToken, SqliteTokenKind, SqliteTreeKind, SqliteVersion, T,
 };
-use itertools::Itertools;
 
 pub struct SqliteParser<T> {
     pub(crate) events: Vec<Event>,
     pub lexer: T,
-    pub(crate) abs_pos: usize,
+    pub(crate) abs_pos: TextSize,
 
     // The following identifier related token sets come from parse.y of SQLite. Because
     // the IDEN_SET (or `ID` in parse.y) changes depending on the build of SQLite, we put
@@ -39,8 +39,8 @@ pub struct SqliteParser<T> {
     pub(crate) with_alias_start: EnumSet<SqliteTokenKind>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum Event {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
     Open {
         kind: SqliteTreeKind,
         close_idx: usize,
@@ -128,6 +128,17 @@ impl From<&'static [ExpectedItem]> for ParseErrorKind {
     }
 }
 
+impl ParseErrorKind {
+    pub fn is_missing_semicolon_err(&self) -> bool {
+        match self {
+            ParseErrorKind::ExpectedItems(items) => {
+                matches!(items.as_slice(), &[ExpectedItem::Token(T![;])])
+            }
+            _ => false,
+        }
+    }
+}
+
 pub trait Lexer {
     fn all_tokens(self) -> Vec<SqliteToken>;
     fn eof(&self) -> bool;
@@ -145,7 +156,7 @@ pub trait Lexer {
     /// Returns how many tokens were eaten
     fn advance(&mut self) -> usize;
 
-    fn curr_byte_len(&self) -> usize;
+    fn curr_byte_len(&self) -> TextSize;
 }
 
 pub struct OnDemandLexer<'a>
@@ -155,7 +166,7 @@ where
     inner: Cell<Option<itertools::PeekNth<SqliteLexer<'a>>>>,
     all_tokens: Vec<SqliteToken>,
     fuel: Cell<u32>,
-    curr_byte_len: usize,
+    curr_byte_len: TextSize,
     prev_non_triv_tk: Option<usize>,
 }
 
@@ -165,7 +176,7 @@ pub struct NormalLexer {
     fuel: Cell<u32>,
     prev_non_triv_tk: Option<usize>,
     all_tokens_pos: usize,
-    curr_byte_len: usize,
+    curr_byte_len: TextSize,
     tokens: Vec<SqliteTokenKind>,
 }
 
@@ -182,7 +193,7 @@ where
         OnDemandLexer {
             inner: Cell::new(Some(itertools::peek_nth(ia))),
             prev_non_triv_tk: None,
-            curr_byte_len: 0,
+            curr_byte_len: TextSize::new(0),
             all_tokens: Vec::with_capacity(32),
             fuel: Cell::new(256),
         }
@@ -197,7 +208,7 @@ impl<'a> From<SqliteLexer<'a>> for NormalLexer {
             pos: 0,
             prev_non_triv_tk: None,
             all_tokens_pos: 0,
-            curr_byte_len: 0,
+            curr_byte_len: TextSize::new(0),
             tokens: all_tokens
                 .iter()
                 .filter_map(|it| if !it.is_trivia() { Some(it.kind) } else { None })
@@ -222,7 +233,7 @@ where
             .unwrap()
             .next_if(|it| it.is_trivia())
         {
-            self.curr_byte_len += tk.text.len();
+            self.curr_byte_len += tk.text_len();
             self.all_tokens.push(tk);
         }
         // self.inner.set(Some(l));
@@ -240,7 +251,7 @@ where
         if let Some(tk) = self.inner.get_mut().as_mut().unwrap().next() {
             self.fuel.set(256);
             self.prev_non_triv_tk = Some(self.all_tokens.len());
-            self.curr_byte_len += tk.text.len();
+            self.curr_byte_len += tk.text_len();
             self.all_tokens.push(tk);
             // self.inner_token_peek.get_mut().as_mut().unwrap().next().unwrap();
         } else {
@@ -263,7 +274,7 @@ where
         self.all_tokens
     }
 
-    fn curr_byte_len(&self) -> usize {
+    fn curr_byte_len(&self) -> TextSize {
         self.curr_byte_len
     }
 
@@ -324,7 +335,7 @@ impl Lexer for NormalLexer {
         while self.all_tokens_pos < self.all_tokens.len()
             && self.all_tokens[self.all_tokens_pos].is_trivia()
         {
-            self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text.len();
+            self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text_len();
             self.all_tokens_pos += 1;
         }
 
@@ -343,12 +354,13 @@ impl Lexer for NormalLexer {
         self.fuel.set(256);
         self.prev_non_triv_tk = Some(self.all_tokens_pos);
         self.pos += 1;
-        self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text.len();
+        self.curr_byte_len += self.all_tokens[self.all_tokens_pos].text_len();
         self.all_tokens_pos += 1;
 
         return num_trivia_tk_eaten + 1;
     }
-    fn curr_byte_len(&self) -> usize {
+
+    fn curr_byte_len(&self) -> TextSize {
         self.curr_byte_len
     }
 
@@ -387,14 +399,14 @@ impl Lexer for NormalLexer {
 
 impl<T: Lexer> SqliteParser<T> {
     pub fn new(lexer: T) -> Self {
-        Self::_new(lexer, 0)
+        Self::_new(lexer, TextSize::new(0))
     }
 
-    pub fn with_abs_pos(lexer: T, abs_pos: usize) -> Self {
+    pub fn with_abs_pos(lexer: T, abs_pos: TextSize) -> Self {
         Self::_new(lexer, abs_pos)
     }
 
-    pub fn _new(lexer: T, abs_pos: usize) -> Self {
+    pub fn _new(lexer: T, abs_pos: TextSize) -> Self {
         use SqliteTokenKind::*;
         // TODO: Use a parser context to configure IDEN_SET at runtime
 
@@ -602,7 +614,7 @@ impl<T: Lexer> SqliteParser<T> {
         self.close_err(m, error.into());
     }
 
-    pub(crate) fn curr_byte_len(&self) -> usize {
+    pub(crate) fn curr_byte_len(&self) -> TextSize {
         self.lexer.curr_byte_len()
     }
 
@@ -752,49 +764,13 @@ impl<T: Lexer> SqliteParser<T> {
         self.lexer.eof()
     }
 
-    pub(crate) fn build_cst<'a>(self) -> SqliteUntypedCst {
-        let mut all_tokens = self.lexer.all_tokens().into_iter();
-        let mut events = self.events;
+    pub fn to_events_and_tokens(self) -> (Vec<Event>, Vec<SqliteToken>) {
+        (self.events, self.lexer.all_tokens())
+    }
 
-        assert!(matches!(events.pop(), Some(Event::Close { .. })));
+    pub(crate) fn build_cst<CST: CstTrait>(self) -> CST {
+        let all_tokens = self.lexer.all_tokens().into_iter();
 
-        let Some(Event::Open { .. }) = events.first() else {
-            panic!("Expected something in events");
-        };
-
-        let mut cst = SqliteUntypedCst::with_capacity(self.abs_pos, 10);
-        let mut curr = cst.root_mut();
-
-        for (idx, event) in events[1..].iter().enumerate() {
-            match event {
-                Event::Open { kind, close_idx } => {
-                    assert!(matches!(events[idx + close_idx + 1], Event::Close));
-                    let capacity = events[idx + 1..idx + close_idx + 1]
-                        .iter()
-                        .filter(|it| !matches!(it, Event::Close { .. }))
-                        .count();
-                    curr = curr.push_tree(*kind, capacity);
-                    // curr = curr.push_tree(*kind);
-                }
-                Event::Error(error) => {
-                    curr = curr.push_error(error.clone(), 4);
-                    // curr = curr.push_error(*error_idx as usize);
-                }
-                Event::Close { .. } => {
-                    curr = curr.parent_mut();
-                }
-                Event::Advance => {
-                    let token = all_tokens.next().unwrap();
-
-                    curr.push_token(token);
-                }
-            }
-        }
-
-        assert!(all_tokens.next().is_none());
-
-        // cst.add_errors(self.errors);
-
-        cst
+        CST::build(self.abs_pos, all_tokens, self.events)
     }
 }

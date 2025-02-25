@@ -3,8 +3,8 @@ use crate::ungram::{
     UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind, UNGRAMMAR,
 };
 use crate::{
-    CstNode, CstNodeDataKind, NormalLexer, ParseErrorKind, SqliteLexer, SqliteParser,
-    SqliteTokenKind, SqliteUntypedCst, SqliteVersion,
+    CstNodeDataKind, CstNodeTrait, CstTrait, NormalLexer, ParseErrorKind, SqliteLexer,
+    SqliteParser, SqliteTokenKind, SqliteVersion,
 };
 use core::str;
 use nom::bytes::complete::escaped;
@@ -15,7 +15,7 @@ use nom::{
 };
 use pretty_assertions::assert_eq;
 
-pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
+pub fn ensure_ast_conforms_to_ungram(ast: &impl CstTrait) {
     let mut traverser = UngramTraverser::new(ast.root(), &UNGRAMMAR.root());
 
     let mut before_backtrack = None;
@@ -24,7 +24,7 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
     while let Some(result) = traverser.next() {
         match result {
             UngramTraverserNodeKind::Token { name, ast_node, .. } => {
-                match ast_node.map(|it| &it.data.kind) {
+                match ast_node.map(|it| it.data().kind.clone()) {
                     Some(CstNodeDataKind::Token(tk))
                         if tk.kind.as_str() == name.trim_start_matches("KW_")
                             || fat_ungram_tokens_match_ast(name, tk.kind) =>
@@ -59,7 +59,7 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
                 }
             }
             UngramTraverserNodeKind::Tree { name, ast_node, .. } => {
-                match ast_node.map(|it| &it.data.kind) {
+                match ast_node.map(|it| it.data().kind.clone()) {
                     Some(CstNodeDataKind::Tree(tree_kind)) if tree_kind.as_str() == name => {
                         traverser.node_visited_and_expand_children();
                         before_backtrack = None;
@@ -76,6 +76,7 @@ pub fn ensure_ast_conforms_to_ungram(ast: &SqliteUntypedCst) {
                         let ast_node_as_string = ast_node
                             .map(|it| it.as_str().to_owned())
                             .unwrap_or("None".to_string());
+
                         if before_backtrack.is_none() {
                             before_backtrack = Some((name.to_owned(), ast_node_as_string));
                         }
@@ -134,9 +135,9 @@ pub fn parse_is_at(func: fn(&SqliteParser<NormalLexer>) -> bool, input: &str) ->
     func(&p)
 }
 
-pub fn check_input(actual_tree: &SqliteUntypedCst, expected_as_str: &str) {
+pub fn check_input(actual_tree: &impl CstTrait, expected_as_str: &str) {
     // let (_, data) = test_data(&test_input).unwrap();
-    let actual = convert_tree_to_simple_node(&actual_tree);
+    let actual = convert_tree_to_simple_node(actual_tree);
     let (_, expected) = str_to_simple_node(expected_as_str).unwrap();
 
     println!("{actual_tree}");
@@ -250,8 +251,11 @@ fn str_to_simple_node<'a>(i: &'a str) -> IResult<&'a str, SimpleSqliteNode, Verb
     ))
 }
 
-fn into_simple_node(input: CstNode, ast: &SqliteUntypedCst) -> Option<SimpleSqliteNode> {
-    let simple_node = match &input.data.kind {
+fn into_simple_node<'a>(
+    input: impl CstNodeTrait<'a>,
+    ast: &impl CstTrait,
+) -> Option<SimpleSqliteNode> {
+    let simple_node = match &input.data().kind {
         CstNodeDataKind::Tree(tree_kind) => SimpleSqliteNode::SqliteNode {
             name: format!("{:?}", tree_kind),
             children: input
@@ -286,7 +290,7 @@ fn into_simple_node(input: CstNode, ast: &SqliteUntypedCst) -> Option<SimpleSqli
     Some(simple_node)
 }
 
-fn convert_tree_to_simple_node(ast: &SqliteUntypedCst) -> SimpleSqliteNode {
+fn convert_tree_to_simple_node(ast: &impl CstTrait) -> SimpleSqliteNode {
     let root = ast.root();
 
     // If the root is the File node, hide it so our test data is a bit cleaner
