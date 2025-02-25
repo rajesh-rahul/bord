@@ -29,7 +29,7 @@ pub struct BordLangServer {
 impl BordLangServer {
     pub fn new(client: async_lsp::ClientSocket) -> Self {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../../schema.sql"))
+        conn.execute_batch(include_str!("../../test_schema.sql"))
             .unwrap();
 
         BordLangServer {

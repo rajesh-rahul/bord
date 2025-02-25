@@ -9,7 +9,7 @@ fn parser_benchmark(c: &mut Criterion) {
     // Create a benchmark group
     let mut group = c.benchmark_group("Parser Sakila Bench");
 
-    let input_sql = include_str!("../../schema.sql");
+    let input_sql = include_str!("../../test_schema.sql");
 
     group.bench_with_input("Bord Parser - SlotMapCST", input_sql, |b, s| {
         b.iter(|| {
