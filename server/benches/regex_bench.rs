@@ -1,4 +1,3 @@
-use bord_sqlite3_parser::{batch, incr};
 use criterion::{criterion_group, criterion_main, Criterion};
 use regex::Regex;
 
@@ -15,7 +14,7 @@ fn regex_benchmark(c: &mut Criterion) {
         }
     "#;
 
-    group.bench_with_input("Regex SQL String match", input, |b, s| {
+    group.bench_with_input("Regex SQL String match", input, |b, _s| {
         let re = Regex::new(
             r#"sql!\(\s*(?:"?(?<n1>(?:\\.|[^"\\])*)"|r#"(?<n2>(?:\\.|[^"\\])*)"\#)\s*\)"#,
         )
@@ -27,9 +26,8 @@ fn regex_benchmark(c: &mut Criterion) {
                 .captures_iter(input)
                 .flat_map(|cap| names.into_iter().flat_map(move |nm| cap.name(nm)))
             {
-                let start = m.start();
-                let end = m.end();
-                // println!("SQL: {}, Position: {}-{}", m.as_str(), start, end);
+                let _start = m.start();
+                let _end = m.end();
             }
         })
     });

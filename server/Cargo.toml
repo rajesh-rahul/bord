@@ -10,9 +10,18 @@ line-index = "0.1.1"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+text-size.workspace = true
 bord-sqlite3-parser = { path = "../sqlite3-parser" }
 itertools = "0.14.0"
 dashmap = "6.1.0"
 rusqlite =  { features = ["bundled", "wasm32-wasi-vfs"], git ="https://github.com/trevyn/rusqlite", rev = "415cafed922f8aaa9746c8c21cb60c176790d315" }
 async-lsp = { version = "0.2.1", default-features = false }
 pretty_assertions.workspace = true
+regex = "1.11"
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "regex_bench"
+harness = false
