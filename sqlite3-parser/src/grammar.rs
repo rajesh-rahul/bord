@@ -113,9 +113,8 @@ pub fn statement_no_cte<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     let m = p.open();
 
-    if p.nth(0) == KW_CREATE {}
-
-    let _ = match (p.nth(0), p.nth(1), p.nth(2)) {
+    #[rustfmt::skip]
+    match (p.nth(0), p.nth(1), p.nth(2)) {
         (KW_CREATE, KW_TEMPORARY | KW_TEMP, KW_TABLE) => create_table_stmt(p, r),
         (KW_CREATE, KW_TABLE, _) => create_table_stmt(p, r),
 
@@ -775,8 +774,8 @@ pub fn returning_clause_expr<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     if p.eat(KW_AS) {
         must_eat_name(p, r, AliasName);
-    } else {
-        must_eat_name(p, r, AliasName);
+    } else if p.at_any(p.name_token) {
+        p.wrap(AliasName, |p| p.guaranteed_any(p.name_token));
     }
 
     p.close(m, ReturningClauseExpr);
