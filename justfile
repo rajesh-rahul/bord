@@ -32,3 +32,6 @@ fix:
 
 test:
     cargo test --all-features
+
+flamegraph:
+    cargo flamegraph --root --bench parser_bench -- --bench
