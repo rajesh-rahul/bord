@@ -143,11 +143,12 @@ impl SqliteLexer<'_> {
             let mut word: [u8; MAX_KEYWORD_LEN] = [0; MAX_KEYWORD_LEN];
             let input = lexer.cursor.input.clone();
 
-            // Note: The set of characters allowed in keywords is a subset of characters
+            // NOTE: The set of characters allowed in keywords is a subset of characters
             // allowed in identifiers. Therefore we can take form a word
             // with max len being MAX_KEYWORD_LEN) of iden characters and then check if the word
             // exists in sqlite_keywords()
             let mut iden_iter = input
+                // NOTE: identifier_continue is a superset of identifier_start
                 .take_while(|&ch| is_identifier_continue(ch))
                 .map(|ch| ch.to_ascii_uppercase())
                 .enumerate();
