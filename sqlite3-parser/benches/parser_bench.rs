@@ -1,4 +1,4 @@
-use bord_sqlite3_parser::{batch, incr};
+use bord_sqlite3_parser::{batch, incr, slot};
 use criterion::{criterion_group, criterion_main, Criterion};
 use fallible_iterator::FallibleIterator;
 use sqlite3_parser::lexer::sql::Parser as LemonParser;
@@ -11,14 +11,21 @@ fn parser_benchmark(c: &mut Criterion) {
 
     let input_sql = include_str!("../../schema.sql");
 
-    group.bench_with_input("Bord Incremental Parser", input_sql, |b, s| {
+    group.bench_with_input("Bord Parser - SlotMapCST", input_sql, |b, s| {
+        b.iter(|| {
+            let _cst: slot::SlotIncrSqlCst = bord_sqlite3_parser::parse(s);
+            // assert!(cst.errors().next().is_none());
+        })
+    });
+
+    group.bench_with_input("Bord Parser - Nested Vector CST", input_sql, |b, s| {
         b.iter(|| {
             let _cst: incr::IncrSqlCst = bord_sqlite3_parser::parse(s);
             // assert!(cst.errors().next().is_none());
         })
     });
 
-    group.bench_with_input("Bord Batch/Regular Parser", input_sql, |b, s| {
+    group.bench_with_input("Bord Parser - Single Vector CST", input_sql, |b, s| {
         b.iter(|| {
             let _cst: batch::SqlCst = bord_sqlite3_parser::parse(s);
             // assert!(cst.errors().next().is_none());
@@ -60,7 +67,7 @@ fn basic_queries(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        "Bord Incremental Parser - Select query",
+        "Bord Parser - Nested Vector CST - Select query",
         &string,
         |b, &s| {
             b.iter(|| {
@@ -71,7 +78,7 @@ fn basic_queries(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        "Bord Batch/Regular Parser - Select query",
+        "Bord Parser - Single Vector CST - Select query",
         &string,
         |b, &s| {
             b.iter(|| {
@@ -104,7 +111,7 @@ fn basic_queries(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        "Bord Incremental Parser - WithSelect query",
+        "Bord Parser - Nested Vector CST - WithSelect query",
         &with_query,
         |b, &s| {
             b.iter(|| {
@@ -115,7 +122,7 @@ fn basic_queries(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        "Bord Batch/Regular Parser - WithSelect query",
+        "Bord Parser - Single Vector CST - WithSelect query",
         &with_query,
         |b, &s| {
             b.iter(|| {
