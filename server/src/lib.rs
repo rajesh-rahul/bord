@@ -1,8 +1,11 @@
 use std::ops::ControlFlow;
 use std::sync::Mutex;
 
+use bord_sqlite3_parser::CstNodeTrait;
+use bord_sqlite3_parser::CstTrait;
 use capabilities::server_capabilities;
 mod capabilities;
+mod config;
 mod features;
 mod flycheck;
 mod from_lsp;
@@ -13,10 +16,12 @@ use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::notification as not;
 use async_lsp::lsp_types::request as req;
 use async_lsp::router::Router;
+use text_document::TextDocumentCstKind;
 
 #[derive(Debug)]
 pub struct BordLangServer {
     client: async_lsp::ClientSocket,
+    config: config::BordConfig,
     vfs: vfs::Vfs,
     flycheck_db: Mutex<rusqlite::Connection>,
 }
@@ -30,6 +35,7 @@ impl BordLangServer {
         BordLangServer {
             client,
             vfs: Default::default(),
+            config: Default::default(),
             flycheck_db: Mutex::new(conn),
         }
     }
@@ -39,7 +45,7 @@ fn did_open_text_document(
     server: &mut BordLangServer,
     params: lsp::DidOpenTextDocumentParams,
 ) -> ControlFlow<Result<(), async_lsp::Error>> {
-    server.vfs.add_new_text_document(params);
+    server.vfs.add_new_text_document(server, params);
 
     ControlFlow::Continue(())
 }
@@ -65,7 +71,7 @@ fn did_change_text_document(
         return ControlFlow::Continue(());
     };
 
-    let mod_info = match doc.apply_changes(version, params.content_changes) {
+    let mod_info = match doc.apply_changes(server, version, params) {
         Ok(mod_info) => mod_info,
         Err(err) => {
             tracing::warn!("{}", err);
@@ -73,8 +79,8 @@ fn did_change_text_document(
         }
     };
 
-    doc.update_errors(mod_info, &server.flycheck_db.lock().unwrap())
-        .unwrap();
+    // doc.update_errors(mod_info, &server.flycheck_db.lock().unwrap())
+    //     .unwrap();
     // TODO: TERRIBLE! connection and flycheck need more work
     if let Err(err) =
         server
@@ -114,9 +120,26 @@ fn completion(
         return None;
     };
 
-    let ast = &document.cst;
+    let completions = match &document.cst {
+        TextDocumentCstKind::FullSqlFile(incr_cst) => {
+            features::create_completion_context(incr_cst, cursor)
+        }
+        TextDocumentCstKind::NonSqlFile { csts, .. } => {
+            csts.iter()
+                .find_map(|cst| {
+                    // Inclusive range to ensure we detect the right CST
+                    let range = cst.root().start_pos()..=cst.root().end_pos();
+                    if range.contains(&cursor.into()) {
+                        Some(features::create_completion_context(cst, cursor))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Vec::new())
+        }
+    };
 
-    let completions = features::create_completion_context(ast, cursor)
+    let completions = completions
         .into_iter()
         .map(|it| lsp::CompletionItem {
             label: it,
@@ -145,10 +168,10 @@ pub fn router(client: async_lsp::ClientSocket) -> Router<BordLangServer> {
         .notification::<not::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
         .notification::<not::DidOpenTextDocument>(did_open_text_document)
         .notification::<not::DidChangeTextDocument>(did_change_text_document)
-        // .request::<req::Completion, _>(|s, p| {
-        //     let completions = completion(s, p);
-        //     async move { Ok(completions) }
-        // })
+        .request::<req::Completion, _>(|s, p| {
+            let completions = completion(s, p);
+            async move { Ok(completions) }
+        })
         .notification::<not::DidCloseTextDocument>(did_close_text_document)
         .unhandled_notification(|_, _| ControlFlow::Continue(()));
 

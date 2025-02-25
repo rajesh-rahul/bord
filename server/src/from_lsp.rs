@@ -1,6 +1,6 @@
 use anyhow::format_err;
 use async_lsp::lsp_types as lsp;
-use bord_sqlite3_parser::CstNode;
+use bord_sqlite3_parser::{incr, CstNodeTrait};
 use line_index::{LineIndex, TextRange, TextSize, WideLineCol};
 
 /// Convert (line, column) for a particular text document into an offset value from the start
@@ -58,7 +58,7 @@ pub fn lsp_range(line_index: &LineIndex, range: TextRange) -> anyhow::Result<lsp
 
 pub fn node_lsp_range<'a>(
     line_index: &LineIndex,
-    node: &CstNode<'a>,
+    node: &incr::IncrCstNode<'a>,
 ) -> anyhow::Result<lsp::Range> {
     let start: u32 = node.start_pos_skip_trivia().try_into()?;
     let end: u32 = node.end_pos_skip_trivia().try_into()?;

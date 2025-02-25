@@ -1,4 +1,4 @@
-use crate::text_document::TextDocument;
+use crate::{text_document::TextDocument, BordLangServer};
 use async_lsp::lsp_types as lsp;
 use dashmap::DashMap;
 
@@ -9,11 +9,14 @@ pub struct Vfs {
 }
 
 impl Vfs {
-    pub fn add_new_text_document(&self, data: lsp::DidOpenTextDocumentParams) {
-        let doc_url = data.text_document.uri;
-        let doc_version = data.text_document.version;
+    pub fn add_new_text_document(
+        &self,
+        server: &BordLangServer,
+        data: lsp::DidOpenTextDocumentParams,
+    ) {
+        let doc_url = data.text_document.uri.clone();
+        let new_doc = TextDocument::new(server, data);
 
-        let new_doc = TextDocument::new(doc_version, data.text_document.text);
         if let Some(_) = self.files.insert(doc_url.clone(), new_doc) {
             tracing::warn!("{doc_url} already existed")
         }

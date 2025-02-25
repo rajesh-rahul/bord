@@ -1,15 +1,12 @@
 use bord_sqlite3_parser::ungram::{
-    rule_to_str, Rule, UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind,
-    UNGRAMMAR,
+    Rule, UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind, UNGRAMMAR,
 };
-use bord_sqlite3_parser::{
-    CstNode, CstNodeData, CstNodeDataKind, NodeId, SqliteTokenKind, SqliteUntypedCst,
-};
+use bord_sqlite3_parser::{CstNodeData, CstNodeDataKind, CstNodeTrait, CstTrait, SqliteTokenKind};
 use hashbrown::HashSet;
 use itertools::Itertools;
 use line_index::TextSize;
 
-pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize) -> Vec<String> {
+pub(crate) fn create_completion_context<Cst: CstTrait>(cst: &Cst, cursor: TextSize) -> Vec<String> {
     //// Find the token to the left of autocomplete position. We ignore trivial tokens (like whitespace tokens)
     let mut nodes_iter = cst.root().me_and_descendants().rev();
 
@@ -33,7 +30,7 @@ pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize
     }
 
     let path_to_target = calculate_path_to_target(&target);
-    tracing::info!(?path_to_target);
+    // tracing::info!(?path_to_target);
 
     let prefix_removed = |completions: &[String], prefix: &str| {
         completions
@@ -66,7 +63,8 @@ pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize
 
     // If we didn't hit any special cases, we are ready to walk the grammar tree
     let mut traverser = UngramTraverser::new(cst.root(), UNGRAMMAR.root());
-    let ancestors_ids: HashSet<NodeId> = target.ancestors().map(|it| it.fat_id.into()).collect();
+    let ancestors_ids: HashSet<<Cst::Node<'_> as CstNodeTrait<'_>>::Id> =
+        target.ancestors().map(|it| it.id()).collect();
 
     let mut target_rule = None;
 
@@ -76,18 +74,17 @@ pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize
                 name,
                 ast_node,
                 rule,
-            } => match ast_node {
-                Some(
-                    node @ CstNode {
-                        data:
-                            CstNodeData {
-                                kind: CstNodeDataKind::Token(_),
-                                ..
-                            },
+            } => match ast_node.map(|it| (it, it.data())) {
+                Some((
+                    node,
+                    CstNodeData {
+                        kind: CstNodeDataKind::Token(_),
                         ..
                     },
-                ) if node.as_str() == name.trim_start_matches("KW_") || node.as_str() == "IDEN" => {
-                    if node.fat_id == target.fat_id {
+                )) if node.as_str() == name.trim_start_matches("KW_")
+                    || node.as_str() == "IDEN" =>
+                {
+                    if node.equals(&target) {
                         target_rule = Some(rule);
                         break;
                     }
@@ -104,23 +101,20 @@ pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize
                 name,
                 rule,
                 ast_node,
-            } => match ast_node {
-                Some(
-                    node @ CstNode {
-                        data:
-                            CstNodeData {
-                                kind: CstNodeDataKind::Tree(_),
-                                ..
-                            },
+            } => match ast_node.map(|it| (it, it.data())) {
+                Some((
+                    node,
+                    CstNodeData {
+                        kind: CstNodeDataKind::Tree(_),
                         ..
                     },
-                ) if node.as_str() == name => {
-                    if node.fat_id == target.fat_id {
+                )) if node.as_str() == name => {
+                    if node.equals(&target) {
                         target_rule = Some(rule);
                         break;
                     }
 
-                    if ancestors_ids.contains(&node.fat_id) {
+                    if ancestors_ids.contains(&node.id()) {
                         traverser.node_visited_and_expand_children();
                     } else {
                         traverser.node_visited();
@@ -145,7 +139,7 @@ pub(crate) fn create_completion_context(cst: &SqliteUntypedCst, cursor: TextSize
                 if let Some(comp_target) =
                     first_follow_rule(&before_comp_target, traverser.rules_history())
                 {
-                    tracing::info!("completion_target: {}", rule_to_str(comp_target));
+                    // tracing::info!("completion_target: {}", rule_to_str(comp_target));
 
                     let mut new_tree = CompletionNode::new_tree();
                     make_completions(comp_target, &mut HashSet::new(), &mut new_tree, 0);
@@ -265,7 +259,7 @@ pub enum AstPath {
     Ancestor(&'static str),
 }
 
-fn calculate_path_to_target<'a>(target: &CstNode<'a>) -> Vec<AstPath> {
+fn calculate_path_to_target<'a>(target: &impl CstNodeTrait<'a>) -> Vec<AstPath> {
     use AstPath::*;
     // Add my ancestors
     let mut path_to_target: Vec<_> = target
@@ -467,11 +461,11 @@ fn make_completions(
     completions: &mut CompletionNode,
     level: usize,
 ) -> bool {
-    eprintln!(
-        "{}make_completions: {:?} - {completions:?}",
-        "   ".repeat(level),
-        rule_to_str(rule),
-    );
+    // eprintln!(
+    //     "{}make_completions: {:?} - {completions:?}",
+    //     "   ".repeat(level),
+    //     rule_to_str(rule),
+    // );
 
     let mut result;
 
@@ -580,13 +574,13 @@ fn make_completions(
     }
 
     let mut all_paths = Vec::new();
-    resolve_tree(&completions, &mut Vec::new(), &mut all_paths);
+    resolve_tree(completions, &mut Vec::new(), &mut all_paths);
 
-    eprintln!(
-        "{}make_completions_done: {:?} - {completions:?}",
-        "   ".repeat(level),
-        rule_to_str(rule),
-    );
+    // eprintln!(
+    //     "{}make_completions_done: {:?} - {completions:?}",
+    //     "   ".repeat(level),
+    //     rule_to_str(rule),
+    // );
 
     return result;
 }
@@ -594,11 +588,13 @@ fn make_completions(
 #[cfg(test)]
 mod completions_tests {
     use super::*;
+    use bord_sqlite3_parser::{batch, incr, slot};
+
     use pretty_assertions::assert_eq;
 
     /// Autocomplete position is indicated by `. If the position is at the end of the sql string
     /// ` is not needed.
-    fn autocomplete_sql(sql_with_cursor: &str) -> Vec<String> {
+    fn autocomplete_sql<CST: CstTrait>(sql_with_cursor: &str) -> Vec<String> {
         let autocomplete_cursor = TextSize::new(
             sql_with_cursor
                 .chars()
@@ -607,7 +603,7 @@ mod completions_tests {
         );
 
         let sql = sql_with_cursor.replace("`", "");
-        let ast = bord_sqlite3_parser::parse(&sql);
+        let ast: CST = bord_sqlite3_parser::parse(&sql);
 
         create_completion_context(&ast, autocomplete_cursor)
     }
@@ -616,7 +612,29 @@ mod completions_tests {
         ($testname:ident, $sql:expr, $expected:expr) => {
             #[test]
             fn $testname() {
-                let completions = autocomplete_sql($sql);
+                let completions = autocomplete_sql::<incr::IncrSqlCst>($sql);
+
+                let completions_set = completions.into_iter().sorted().collect_vec();
+                let expected = $expected
+                    .iter()
+                    .map(|it| it.to_string())
+                    .sorted()
+                    .collect_vec();
+
+                assert_eq!(completions_set, expected);
+
+                let completions = autocomplete_sql::<batch::SqlCst>($sql);
+
+                let completions_set = completions.into_iter().sorted().collect_vec();
+                let expected = $expected
+                    .iter()
+                    .map(|it| it.to_string())
+                    .sorted()
+                    .collect_vec();
+
+                assert_eq!(completions_set, expected);
+
+                let completions = autocomplete_sql::<slot::SlotIncrSqlCst>($sql);
 
                 let completions_set = completions.into_iter().sorted().collect_vec();
                 let expected = $expected
