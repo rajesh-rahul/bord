@@ -86,7 +86,7 @@ impl<'a> SqliteLexer<'a> {
             return SqliteToken::new(EOF, "", None);
         };
 
-        // token is 3-tuple long because that's our longest 'fixed' token
+        // This is 3-tuple long because that's our longest 'fixed' token
         let tk_tuple = (first, self.cursor.second(), self.cursor.third());
 
         let mut build_token = |kind: SqliteTokenKind| {
