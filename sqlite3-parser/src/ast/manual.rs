@@ -1,14 +1,15 @@
-use crate::{
-    grammar::common::NUMERIC_LIT, CstNode, SqliteToken, SqliteTokenKind, SqliteTreeKind, T,
-};
+use crate::{grammar::common::NUMERIC_LIT, SqliteToken, SqliteTokenKind, SqliteTreeKind};
+
+use crate::CstNodeTrait;
 
 use super::generated::*;
 
-pub struct PragmaStmt<'a> {
-    inner: CstNode<'a>,
+pub struct PragmaStmt<N> {
+    inner: N,
 }
-impl<'a> PragmaStmt<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+
+impl<'a, N: CstNodeTrait<'a>> PragmaStmt<N> {
+    pub fn cast(node: N) -> Option<Self> {
         if node.tree() == Some(SqliteTreeKind::PragmaStmt) {
             Some(Self { inner: node })
         } else {
@@ -16,20 +17,20 @@ impl<'a> PragmaStmt<'a> {
         }
     }
 
-    pub fn full_pragma_name(&self) -> Option<FullPragmaName<'a>> {
+    pub fn full_pragma_name(&self) -> Option<FullPragmaName<N>> {
         self.inner.children().flat_map(FullPragmaName::cast).next()
     }
 
-    pub fn pragma_value(&self) -> Option<PragmaValue<'a>> {
+    pub fn pragma_value(&self) -> Option<PragmaValue<N>> {
         self.inner.children().flat_map(PragmaValue::cast).next()
     }
 }
 
-pub struct Offset<'a> {
-    inner: CstNode<'a>,
+pub struct Offset<N> {
+    inner: N,
 }
-impl<'a> Offset<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+impl<'a, N: CstNodeTrait<'a>> Offset<N> {
+    pub fn cast(node: N) -> Option<Self> {
         if node.tree() == Some(SqliteTreeKind::Offset) {
             Some(Self { inner: node })
         } else {
@@ -37,51 +38,16 @@ impl<'a> Offset<'a> {
         }
     }
 
-    pub fn expr(&self) -> Option<Expr<'a>> {
+    pub fn expr(&self) -> Option<Expr<N>> {
         self.inner.children().flat_map(Expr::cast).next()
     }
 }
 
-pub struct TypeName<'a> {
-    inner: CstNode<'a>,
+pub struct SignedNumber<N> {
+    pub(crate) inner: N,
 }
-impl<'a> TypeName<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        if node.tree() == Some(SqliteTreeKind::TypeName) {
-            Some(Self { inner: node })
-        } else {
-            None
-        }
-    }
-
-    pub fn type_name_words(&self) -> impl Iterator<Item = TypeNameWord<'a>> {
-        self.inner.children().flat_map(TypeNameWord::cast)
-    }
-
-    pub fn left_signed_number(&self) -> Option<SignedNumber<'a>> {
-        self.inner
-            .non_trivial_children()
-            .take_while(|it| it.token_kind() != Some(T![,]))
-            .find(|it| it.tree() == Some(SqliteTreeKind::SignedNumber))
-            .and_then(SignedNumber::cast)
-    }
-
-    pub fn right_signed_number(&self) -> Option<SignedNumber<'a>> {
-        let mut child_iter = self.inner.non_trivial_children();
-
-        // Navigate to the comma child if it exists (This will allow us to skip over the left
-        // signed number)
-        child_iter.find(|it| it.token_kind() == Some(T![,]));
-
-        child_iter.find_map(SignedNumber::cast)
-    }
-}
-
-pub struct SignedNumber<'a> {
-    inner: CstNode<'a>,
-}
-impl<'a> SignedNumber<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+impl<'a, N: CstNodeTrait<'a>> SignedNumber<N> {
+    pub fn cast(node: N) -> Option<Self> {
         if node.tree() == Some(SqliteTreeKind::SignedNumber) {
             Some(Self { inner: node })
         } else {
@@ -89,7 +55,7 @@ impl<'a> SignedNumber<'a> {
         }
     }
 
-    pub fn number_sign(&self) -> impl Iterator<Item = NumberSign<'a>> {
+    pub fn number_sign(&self) -> impl Iterator<Item = NumberSign<N>> + use<'_, 'a, N> {
         self.inner.children().flat_map(NumberSign::cast)
     }
 
@@ -104,148 +70,67 @@ impl<'a> SignedNumber<'a> {
     }
 }
 
-pub enum NumberSign<'a> {
-    PLUS(&'a SqliteToken),
-    MINUS(&'a SqliteToken),
+pub enum NumberSign<N> {
+    PLUS(N),
+    MINUS(N),
 }
-impl<'a> NumberSign<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+
+impl<'a, N: CstNodeTrait<'a>> NumberSign<N> {
+    pub fn cast(node: N) -> Option<Self> {
         use SqliteTokenKind as TokenKind;
 
         if node.token_kind() == Some(TokenKind::PLUS) {
-            return Some(Self::PLUS(node.token().unwrap()));
+            return Some(Self::PLUS(node));
         } else if node.token_kind() == Some(TokenKind::MINUS) {
-            return Some(Self::MINUS(node.token().unwrap()));
+            return Some(Self::MINUS(node));
         } else {
             return None;
         }
     }
 }
 
-pub struct OpBetweenAnd<'a> {
-    inner: CstNode<'a>,
+pub struct TableOrSubquery<N> {
+    inner: N,
 }
-impl<'a> OpBetweenAnd<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        if node.tree() == Some(SqliteTreeKind::OpBetweenAnd) {
+
+impl<'a, N: CstNodeTrait<'a>> TableOrSubquery<N> {
+    pub fn cast(node: N) -> Option<Self> {
+        if node.tree() == Some(SqliteTreeKind::TableOrSubquery) {
             Some(Self { inner: node })
         } else {
             None
         }
     }
-    pub fn target_expr(&self) -> Option<Expr<'a>> {
-        self.inner.valid_children().next().and_then(Expr::cast)
+    pub fn untyped(&self) -> N
+    where
+        N: Copy,
+    {
+        self.inner
     }
-
-    pub fn low_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_BETWEEN));
-
-        child_iter
-            .take_while(|it| it.token_kind() != Some(SqliteTokenKind::KW_AND))
-            .find_map(Expr::cast)
+    pub fn table_or_subquery_kind(&self) -> Option<TableOrSubqueryKind<N>> {
+        self.inner
+            .valid_children()
+            .flat_map(TableOrSubqueryKind::cast)
+            .next()
     }
-
-    pub fn high_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_AND));
-
-        child_iter.find_map(Expr::cast)
+    pub fn with_alias(&self) -> Option<WithAlias<N>> {
+        self.inner
+            .find_children(SqliteTreeKind::WithAlias)
+            .flat_map(WithAlias::cast)
+            .next()
     }
 }
 
-pub struct OpNotBetweenAnd<'a> {
-    inner: CstNode<'a>,
-}
-impl<'a> OpNotBetweenAnd<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        if node.tree() == Some(SqliteTreeKind::OpNotBetweenAnd) {
-            Some(Self { inner: node })
-        } else {
-            None
-        }
-    }
-    pub fn target_expr(&self) -> Option<Expr<'a>> {
-        self.inner.valid_children().next().and_then(Expr::cast)
-    }
-
-    pub fn low_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_BETWEEN));
-
-        child_iter
-            .take_while(|it| it.token_kind() != Some(SqliteTokenKind::KW_AND))
-            .find_map(Expr::cast)
-    }
-
-    pub fn high_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_AND));
-
-        child_iter.find_map(Expr::cast)
-    }
+pub enum TableOrSubqueryKind<N> {
+    QualifiedTableName(QualifiedTableName<N>),
+    FromClauseTableValueFunction(FromClauseTableValueFunction<N>),
+    SelectStmtWithCte(SelectStmtWithCte<N>),
+    JoinClause(JoinClause<N>),
+    TableOrSubquery(N), // To avoid boxing
 }
 
-pub struct CaseWhenClause<'a> {
-    inner: CstNode<'a>,
-}
-impl<'a> CaseWhenClause<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        if node.tree() == Some(SqliteTreeKind::CaseWhenClause) {
-            Some(Self { inner: node })
-        } else {
-            None
-        }
-    }
-
-    pub fn when_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_WHEN));
-
-        child_iter
-            .take_while(|it| it.token_kind() != Some(SqliteTokenKind::KW_THEN))
-            .find_map(Expr::cast)
-    }
-
-    pub fn then_expr(&self) -> Option<Expr<'a>> {
-        let mut child_iter = self.inner.valid_children();
-
-        child_iter.find(|it| it.token_kind() == Some(SqliteTokenKind::KW_THEN));
-
-        child_iter.find_map(Expr::cast)
-    }
-}
-pub struct FromClause<'a> {
-    inner: CstNode<'a>,
-}
-impl<'a> FromClause<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        if node.tree() == Some(SqliteTreeKind::FromClause) {
-            Some(Self { inner: node })
-        } else {
-            None
-        }
-    }
-    pub fn value(&self) -> Option<FromClauseValue<'a>> {
-        self.inner.children().flat_map(FromClauseValue::cast).next()
-    }
-}
-
-pub enum TableOrSubquery<'a> {
-    QualifiedTableName(QualifiedTableName<'a>),
-    FromClauseTableValueFunction(FromClauseTableValueFunction<'a>),
-    FromClauseSelectStmt(FromClauseSelectStmt<'a>),
-    JoinClause(JoinClause<'a>),
-    TableOrSubquery(CstNode<'a>), // To avoid boxing
-}
-
-impl<'a> TableOrSubquery<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+impl<'a, N: CstNodeTrait<'a>> TableOrSubqueryKind<N> {
+    pub fn cast(node: N) -> Option<Self> {
         match node.tree() {
             Some(SqliteTreeKind::QualifiedTableName) => Some(Self::QualifiedTableName(
                 QualifiedTableName::cast(node).unwrap(),
@@ -255,8 +140,8 @@ impl<'a> TableOrSubquery<'a> {
                     FromClauseTableValueFunction::cast(node).unwrap(),
                 ))
             }
-            Some(SqliteTreeKind::FromClauseSelectStmt) => Some(Self::FromClauseSelectStmt(
-                FromClauseSelectStmt::cast(node).unwrap(),
+            Some(SqliteTreeKind::SelectStmtWithCte) => Some(Self::SelectStmtWithCte(
+                SelectStmtWithCte::cast(node).unwrap(),
             )),
             Some(SqliteTreeKind::JoinClause) => {
                 Some(Self::JoinClause(JoinClause::cast(node).unwrap()))
@@ -267,50 +152,31 @@ impl<'a> TableOrSubquery<'a> {
     }
 }
 
-pub enum FromClauseValue<'a> {
-    JoinClause(JoinClause<'a>),
-    TableOrSubquery(TableOrSubquery<'a>),
+pub struct JoinClause<N> {
+    inner: N,
 }
-
-impl<'a> FromClauseValue<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-        match node.tree() {
-            Some(SqliteTreeKind::JoinClause) => {
-                Some(Self::JoinClause(JoinClause::cast(node).unwrap()))
-            }
-            Some(SqliteTreeKind::TableOrSubquery) => {
-                Some(Self::TableOrSubquery(TableOrSubquery::cast(node).unwrap()))
-            }
-            _ => None,
-        }
-    }
-}
-
-pub struct JoinClause<'a> {
-    inner: CstNode<'a>,
-}
-impl<'a> JoinClause<'a> {
-    pub fn cast(node: CstNode<'a>) -> Option<Self> {
+impl<'a, N: CstNodeTrait<'a>> JoinClause<N> {
+    pub fn cast(node: N) -> Option<Self> {
         if node.tree() == Some(SqliteTreeKind::JoinClause) {
             Some(Self { inner: node })
         } else {
             None
         }
     }
-    pub fn left_operand(&self) -> Option<FromClauseValue<'a>> {
+    pub fn left_operand(&self) -> Option<FromClauseValue<N>> {
         self.inner
             .valid_children()
             .take_while(|it| it.tree() != Some(SqliteTreeKind::JoinOperator))
             .flat_map(FromClauseValue::cast)
             .next()
     }
-    pub fn join_operator(&self) -> Option<JoinOperator<'a>> {
+    pub fn join_operator(&self) -> Option<JoinOperator<N>> {
         self.inner
             .find_children(SqliteTreeKind::JoinOperator)
             .flat_map(JoinOperator::cast)
             .next()
     }
-    pub fn right_operand(&self) -> Option<FromClauseValue<'a>> {
+    pub fn right_operand(&self) -> Option<FromClauseValue<N>> {
         let mut child_iter = self.inner.valid_children();
 
         child_iter.find(|it| it.tree() == Some(SqliteTreeKind::JoinOperator));
@@ -318,10 +184,73 @@ impl<'a> JoinClause<'a> {
         child_iter.find_map(FromClauseValue::cast)
     }
 
-    pub fn join_constraint(&self) -> Option<JoinConstraint<'a>> {
+    pub fn join_constraint(&self) -> Option<JoinConstraint<N>> {
         self.inner
             .find_children(SqliteTreeKind::JoinConstraint)
             .flat_map(JoinConstraint::cast)
             .next()
+    }
+}
+
+macro_rules! derive_deref {
+    ($($struct_name:ident)*) => {
+        $(
+            impl<'a, N: CstNodeTrait<'a> + Copy> $struct_name<N> {
+                pub fn untyped(&self) -> N {
+                    self.inner
+                }
+            }
+        )*
+    };
+}
+
+pub struct JoinOperator<N> {
+    inner: N,
+}
+
+pub enum JoinOperatorKind {
+    Comma,
+    Cross,
+    Inner,
+    Left,
+    Right,
+    Full,
+    NaturalInner,
+    NaturalLeft,
+    NaturalRight,
+    NaturalFull,
+}
+
+impl<'a, N: CstNodeTrait<'a>> JoinOperator<N> {
+    pub fn cast(node: N) -> Option<Self> {
+        if node.tree() == Some(SqliteTreeKind::JoinClause) {
+            Some(Self { inner: node })
+        } else {
+            None
+        }
+    }
+    pub fn untyped(&self) -> N
+    where
+        N: Copy,
+    {
+        self.inner
+    }
+
+    pub fn kind(&self) -> Option<JoinOperatorKind> {
+        unimplemented!()
+    }
+}
+
+derive_deref! { JoinClause Offset PragmaStmt}
+
+impl<'a, N: CstNodeTrait<'a> + Copy> TableOrSubqueryKind<N> {
+    pub fn untyped(&self) -> N {
+        match self {
+            Self::QualifiedTableName(n) => n.untyped(),
+            Self::FromClauseTableValueFunction(n) => n.untyped(),
+            Self::SelectStmtWithCte(n) => n.untyped(),
+            Self::JoinClause(n) => n.untyped(),
+            Self::TableOrSubquery(n) => *n,
+        }
     }
 }

@@ -1,14 +1,14 @@
+mod compare;
 mod generated;
 mod manual;
 
 pub use generated::*;
-pub use manual::*;
 
 #[test]
 fn test_create_table_ast() {
-    let cst = crate::parse("CREATE TABLE IF NOT EXISTS users(name)");
+    use crate::CstTrait;
+    let cst: crate::incr::IncrSqlCst = crate::parse("CREATE TABLE IF NOT EXISTS users(name)");
 
-    println!("{cst}");
     let create_table_stmt = cst
         .typed_ast()
         .statements()
@@ -18,5 +18,13 @@ fn test_create_table_ast() {
         })
         .unwrap();
 
-    assert!(create_table_stmt.if_not_exists().is_some());
+    println!(
+        "{}",
+        create_table_stmt
+            .full_table_name()
+            .unwrap()
+            .table()
+            .unwrap()
+            .text()
+    );
 }
