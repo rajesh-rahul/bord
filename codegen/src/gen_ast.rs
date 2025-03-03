@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 #[derive(Debug)]
 struct RustStruct {
     name: String,
+    is_token_wrapper_struct: bool,
     methods: Vec<RustMethod>,
 }
 
@@ -15,12 +16,15 @@ struct RustStruct {
 struct RustMethod {
     name: String,
     search_kind: SearchKind,
+    tag: Option<String>,
     return_ty: String,
 }
 
 #[derive(Debug)]
 struct RustEnum {
     name: String,
+    has_lifetime: bool,
+    has_generic: bool,
     fields: Vec<RustEnumField>,
     is_non_terminal_node: bool,
 }
@@ -59,54 +63,15 @@ fn main() {
     let to_write_manually = HashSet::from([
         "PragmaStmt",
         "Offset",
-        "FromClause",
         "TableOrSubquery",
         "JoinClause",
-        "TypeName",
-        "CaseWhenClause",
-        "OpBetweenAnd",
-        "OpNotBetweenAnd",
-        "SignedNumber",
-    ]);
-
-    // Generation special case
-    let bin_op_structs = HashSet::from([
-        "OpConcat",
-        "OpExtractOne",
-        "OpExtractTwo",
-        "OpMultiply",
-        "OpDivide",
-        "OpModulus",
-        "OpAdd",
-        "OpSubtract",
-        "OpBinAnd",
-        "OpBinOr",
-        "OpBinLShift",
-        "OpBinRShift",
-        "OpLT",
-        "OpGT",
-        "OpLTE",
-        "OpGTE",
-        "OpEq",
-        "OpNotEq",
-        "OpAnd",
-        "OpOr",
-        "OpMatch",
-        "OpRegexp",
-        "OpGlob",
-        "OpIs",
-        "OpIsDistinctFrom",
-        "OpIsNotDistinctFrom",
-        "OpNotMatch",
-        "OpNotRegexp",
-        "OpNotGlob",
-        "OpIsNot",
-        "OpLike",
+        "JoinOperator",
+        // "SignedNumber",
     ]);
 
     for node_data in UNGRAMMAR.nodes() {
         if to_write_manually.contains(node_data.name.as_str())
-            || bin_op_structs.contains(node_data.name.as_str())
+        // || bin_op_structs.contains(node_data.name.as_str())
         {
             continue;
         }
@@ -117,8 +82,10 @@ fn main() {
         }
     }
 
-    let skip_set = to_write_manually.union(&bin_op_structs).copied().collect();
-    let code = write_rust_code(&generator, skip_set, bin_op_structs);
+    generator.fix_enum_lifetimebounds();
+
+    // let skip_set = to_write_manually.union(&bin_op_structs).copied().collect();
+    let code = write_rust_code(&generator, to_write_manually);
 
     let code_str = prettyplease::unparse(&syn::parse2(code).unwrap());
 
@@ -152,22 +119,63 @@ impl AstGenerator {
                     rules.extend(vec.iter().rev());
                 }
                 Rule::Opt(rule) => rules.push(rule),
-                _ => unreachable!("{} cannot be a rust struct", rule_to_str(rule)),
+                _ => eprintln!(
+                    "{} cannot be a rust struct. Found in {name}",
+                    rule_to_str(rule)
+                ),
             }
         }
 
         // Return types are unique (to avoid ambiguity)
-        if !methods.iter().map(|it| &it.return_ty).all_unique() {
+        if !methods
+            .iter()
+            .map(|it| (&it.return_ty, &it.tag))
+            .all_unique()
+        {
             panic!("Methods not unique: {methods:?}");
         }
 
         let struct_ = RustStruct {
             name: name.clone(),
+            is_token_wrapper_struct: matches!(rule, Rule::Labeled { .. })
+                && methods.first().is_some_and(|it| {
+                    matches!(it.search_kind, SearchKind::Token | SearchKind::TokenSet)
+                }),
             methods,
         };
         // dbg!(&struct_);
 
         self.structs.insert(name.clone(), struct_);
+    }
+
+    // We need to do this after the construction of all enums otherwise there will be things
+    // missing
+    fn fix_enum_lifetimebounds(&mut self) {
+        fn has_lifetime(gen: &AstGenerator, name: &str) -> bool {
+            gen.enums
+                .get(name)
+                .map(|it| {
+                    it.fields.iter().any(|field| {
+                        if field.kind == RustEnumFieldKind::Token {
+                            true
+                        } else {
+                            has_lifetime(gen, &field.name)
+                        }
+                    })
+                })
+                .unwrap_or(false)
+        }
+
+        let enums_with_lifetime: Vec<_> = self
+            .enums
+            .keys()
+            .filter(|name| has_lifetime(&self, name))
+            .cloned()
+            .collect();
+        for enum_name in enums_with_lifetime {
+            let val = self.enums.get_mut(&enum_name).unwrap();
+            val.has_lifetime = true;
+        }
     }
 
     fn rule_to_rust_method(&mut self, rule: &Rule) -> RustMethod {
@@ -178,6 +186,7 @@ impl AstGenerator {
                     .name
                     .to_owned()
                     .to_case(Case::Snake),
+                tag: None,
                 search_kind: SearchKind::Node,
                 return_ty: UNGRAMMAR.get_node(*node_id).name.to_owned(),
             },
@@ -233,9 +242,22 @@ impl AstGenerator {
                 }
 
                 RustMethod {
-                    name,
+                    name: if label.starts_with("__") {
+                        format!(
+                            "{}_{}",
+                            label.trim_start_matches("__"),
+                            return_ty.to_case(Case::Snake)
+                        )
+                    } else {
+                        label.to_owned()
+                    },
                     search_kind,
                     return_ty,
+                    tag: if label.starts_with("__") {
+                        Some(label.trim_start_matches("__").to_owned())
+                    } else {
+                        None
+                    },
                 }
             }
             _ => unreachable!("{} cannot be a rust method", rule_to_str(rule)),
@@ -285,28 +307,27 @@ impl AstGenerator {
         } else {
             let enum_ = RustEnum {
                 name: name.clone(),
+                has_lifetime: fields.iter().any(|it| it.kind == RustEnumFieldKind::Token),
+                has_generic: fields.iter().any(|it| it.kind == RustEnumFieldKind::Node),
                 fields,
                 is_non_terminal_node: is_node,
             };
-            // dbg!(&enum_);
+
             self.enums.insert(name.clone(), enum_);
         }
     }
 }
 
-fn write_rust_code(
-    generator: &AstGenerator,
-    skip_set: HashSet<&str>,
-    special_cases: HashSet<&str>,
-) -> proc_macro2::TokenStream {
+fn write_rust_code(generator: &AstGenerator, skip_set: HashSet<&str>) -> proc_macro2::TokenStream {
     let enums = generator.enums.values().map(|it| {
-        let enum_name = format_ident!("{}", it.name);
         let fields = it.fields.iter().map(|field| {
             let variant_name = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name));
 
+            let gen_args = generic_args(generator, &field.name);
+
             match field.kind {
-                RustEnumFieldKind::Node => quote! { #variant_name(#variant_name<'a>) },
-                RustEnumFieldKind::Token => quote! { #variant_name(&'a SqliteToken) },
+                RustEnumFieldKind::Node => quote! { #variant_name(#variant_name<N>) },
+                RustEnumFieldKind::Token => quote! { #variant_name(N) },
             }
         });
 
@@ -320,12 +341,29 @@ fn write_rust_code(
             match field.kind {
                 RustEnumFieldKind::Node => {
                     quote! {
-                        CstNodeData::Tree(TreeKind::#variant_name) => return Some(Self::#variant_name(#variant_name::cast(#node_ident_name)?))
+                        CstNodeDataKind::Tree(TreeKind::#variant_name, _) => Some(Self::#variant_name(#variant_name::cast(#node_ident_name)?))
                     }
                 },
                 RustEnumFieldKind::Token => {
                     quote! {
-                        CstNodeData::Token(token @ SqliteToken { kind: TokenKind::#variant_name, .. }) => return Some(Self::#variant_name(&token))
+                        CstNodeDataKind::Token(SqliteToken { kind: TokenKind::#variant_name, .. }) => Some(Self::#variant_name(node))
+                    }
+                },
+            }
+        });
+
+        let field_match_snippet_for_untyped_method = it.fields.iter().map(|field| {
+            let variant_name = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name));
+
+            match field.kind {
+                RustEnumFieldKind::Node => {
+                    quote! {
+                        Self::#variant_name(node) => node.untyped()
+                    }
+                },
+                RustEnumFieldKind::Token => {
+                    quote! {
+                        Self::#variant_name(node) => node.clone()
                     }
                 },
             }
@@ -335,10 +373,12 @@ fn write_rust_code(
             let variant_name = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name));
             let variant_name_lower = format_ident!("{}", convert_symbol_tokens(&field.name).unwrap_or(&field.name).to_case(Case::Snake));
 
+            let gen_args = generic_args(generator, &field.name);
+
             match field.kind {
                 RustEnumFieldKind::Node => {
                     quote! {
-                        pub fn #variant_name_lower(self) -> Option<#variant_name<'a>> {
+                        pub fn #variant_name_lower(self) -> Option<#variant_name<N>> {
                             match self {
                                 Self::#variant_name(item) => Some(item),
                                 _ => None
@@ -348,7 +388,7 @@ fn write_rust_code(
                 },
                 RustEnumFieldKind::Token => {
                     quote! {
-                        pub fn #variant_name_lower(self) -> Option<&'a SqliteToken> {
+                        pub fn #variant_name_lower(self) -> Option<N> {
                             match self {
                                 Self::#variant_name(item) => Some(item),
                                 _ => None
@@ -359,24 +399,47 @@ fn write_rust_code(
             }
         });
 
+        let lifetime = if it.has_lifetime {
+            quote! {'a}
+        } else {
+            quote! {}
+        };
+
+        let (generic_n_def, generic_n) = if it.has_generic {
+            (quote! {N: CstNodeTrait<'a>}, quote! {N,})
+        } else {
+            (quote!{}, quote!{})
+        };
+
+        let enum_name = format_ident!("{}", it.name);
+
+        let cast_func_signature = if it.has_generic {
+            quote! { cast(node: N)}
+        } else {
+            quote! { cast(node: impl CstNodeTrait<'a>)}
+        };
         if it.is_non_terminal_node {
             quote! {
-                pub enum #enum_name<'a> {
+                pub enum #enum_name<N> {
                     #(#fields ,)*
                 }
 
-                impl<'a> #enum_name<'a> {
-                    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-                        use SqliteTreeKind as TreeKind;
-                        use SqliteTokenKind as TokenKind;
+                impl<'a, N: CstNodeTrait<'a>> #enum_name<N> {
+                    pub fn cast(node: N) -> Option<Self> {
                         if node.tree() != Some(TreeKind::#enum_name) {
                             return None
                         }
 
-                        node.valid_children().flat_map(|child| match child.data {
+                        node.valid_children().flat_map(|child| match &child.data().kind {
                             #(#field_match_snippet,)*
-                            _ => return None
+                            _ => None
                         }).next()
+                    }
+
+                    pub fn untyped(&self) -> N where N: Copy {
+                        match self {
+                            #(#field_match_snippet_for_untyped_method,)*
+                        }
                     }
 
                     #(#field_method_snippet)*
@@ -384,17 +447,21 @@ fn write_rust_code(
             }
         } else {
             quote! {
-                pub enum #enum_name<'a> {
+                pub enum #enum_name<N> {
                     #(#fields ,)*
                 }
 
-                impl<'a> #enum_name<'a> {
-                    pub fn cast(node: CstNode<'a>) -> Option<Self> {
-                        use SqliteTreeKind as TreeKind;
-                        use SqliteTokenKind as TokenKind;
-                        match node.data {
+                impl<'a, N: CstNodeTrait<'a>> #enum_name<N> {
+                    pub fn cast(node: N) -> Option<Self> {
+                        match &node.data().kind {
                             #(#field_match_snippet,)*
-                            _ => return None
+                            _ => None
+                        }
+                    }
+
+                    pub fn untyped(&self) -> N where N: Copy {
+                        match self {
+                            #(#field_match_snippet_for_untyped_method,)*
                         }
                     }
 
@@ -409,50 +476,67 @@ fn write_rust_code(
 
         let methods = it.methods.iter().map(|method| {
             let method_name = format_ident!("{}", method.name);
+
             match method.search_kind {
                 SearchKind::Node => {
                     let return_ty = format_ident!("{}", method.return_ty);
-                    quote! {
-                        pub fn #method_name(&self) -> Option<#return_ty<'a>> {
-                            self
-                                .inner
-                                .find_children(SqliteTreeKind::#return_ty)
-                                .flat_map(#return_ty::cast)
-                                .next()
+                    let gen_args = generic_args(generator, &method.return_ty);
+
+                    if let Some(tag) = &method.tag {
+                        let search_tag = format_ident!("{}", tag.to_case(Case::UpperCamel));
+                        quote! {
+                            pub fn #method_name(&self) -> Option<#return_ty<N>> {
+                                self
+                                    .inner
+                                    .find_child_by_tag(SqliteTreeTag::#search_tag)
+                                    .and_then(#return_ty::cast)
+                            }
+                        }
+                    } else {
+                        quote! {
+                            pub fn #method_name(&self) -> Option<#return_ty<N>> {
+                                self
+                                    .inner
+                                    .find_children(SqliteTreeKind::#return_ty)
+                                    .flat_map(#return_ty::cast)
+                                    .next()
+                            }
                         }
                     }
+
                 }
                 SearchKind::TokenSet => {
                     quote! {
-                        pub fn #method_name(&self) -> Option<&'a SqliteToken> {
+                        pub fn #method_name(&self) -> Option<N> {
                             self
                                 .inner
                                 .valid_children()
                                 .next()
-                                .and_then(|it| it.token())
+                                .filter(|it| it.token().is_some())
                         }
                     }
                 }
                 SearchKind::Token => {
                     let return_ty = format_ident!("{}", method.return_ty);
                     quote! {
-                        pub fn #method_name(&self) -> Option<&'a SqliteToken> {
+                        pub fn #method_name(&self) -> Option<N> {
                             self
                                 .inner
                                 .find_children(SqliteTokenKind::#return_ty)
-                                .map(|it| it.token().unwrap())
                                 .next()
+                                .filter(|it| it.token().is_some())
                         }
                     }
                 }
                 SearchKind::Rep => {
                     let return_ty = format_ident!("{}", method.return_ty);
+                    let gen_args = generic_args(generator, &method.return_ty);
 
                     if generator.structs.contains_key(&method.return_ty)
                         || skip_set.contains(method.return_ty.as_str())
                     {
                         quote! {
-                            pub fn #method_name(&self) -> impl Iterator<Item = #return_ty<'a>> {
+                            pub fn #method_name(&self) -> impl Iterator<Item = #return_ty<N>> + use<'_, 'a, N> {
                                 self.inner
                                     .valid_children()
                                     .flat_map(#return_ty::cast)
@@ -472,7 +556,7 @@ fn write_rust_code(
                         };
 
                         quote! {
-                            pub fn #method_name(&self) -> impl Iterator<Item = #return_ty<'a>> {
+                            pub fn #method_name(&self) -> impl Iterator<Item = #return_ty<N>> + use<'_, 'a, N> {
                                 self.inner
                                     .find_children(SqliteTreeKind::#return_ty)
                                     .flat_map(|it| it.children())
@@ -485,8 +569,10 @@ fn write_rust_code(
                 }
                 SearchKind::Alt => {
                     let return_ty = format_ident!("{}", method.return_ty);
+                    let gen_args = generic_args(generator, &method.return_ty);
+
                     quote! {
-                        pub fn #method_name(&self) -> Option<#return_ty<'a>> {
+                        pub fn #method_name(&self) -> Option<#return_ty<N>> {
                             self
                                .inner
                                .children()
@@ -498,67 +584,88 @@ fn write_rust_code(
             }
         });
 
-        quote! {
-            pub struct #struct_name<'a> { pub inner: CstNode<'a> }
+        let text_method = if it.is_token_wrapper_struct {
+            quote! {
+                pub fn text(&'a self) -> &'a str {
+                    self.inner.valid_children().find_map(|it| it.token().map(|it|it.text.as_str())).unwrap()
+                }
+            }
+        } else {
+            quote! {}
+        };
 
-            impl<'a> #struct_name<'a> {
-                pub fn cast(node: CstNode<'a>) -> Option<Self> {
+        quote! {
+            pub struct #struct_name<N> { pub inner: N }
+
+            impl<'a, N: CstNodeTrait<'a>> #struct_name<N> {
+                pub fn cast(node: N) -> Option<Self> {
                     if node.tree() == Some(SqliteTreeKind::#struct_name) {
                         Some(Self{ inner: node })
                     } else {
                         None
                     }
                 }
+
+                pub fn untyped(&self) -> N where N: Copy {
+                    self.inner
+                }
+
+                #text_method
+
                 #(#methods)*
             }
 
         }
     });
 
-    let special_case_structs = special_cases.iter().map(|it| {
-        let struct_name = format_ident!("{it}");
+    // let special_case_structs = special_cases.iter().map(|it| {
+    //     let struct_name = format_ident!("{it}");
 
-        quote! {
-            pub struct #struct_name<'a> { inner: CstNode<'a>  }
+    //     quote! {
+    //         pub struct #struct_name<N> { inner: N  }
 
-            impl<'a> #struct_name<'a> {
-                pub fn cast(node: CstNode<'a>) -> Option<Self> {
-                    if node.tree() == Some(SqliteTreeKind::#struct_name) {
-                        Some(Self{ inner: node })
-                    } else {
-                        None
-                    }
-                }
+    //         impl<'a, N: CstNodeTrait<'a>> #struct_name<N> {
+    //             pub fn cast(node: N) -> Option<Self> {
+    //                 if node.tree() == Some(SqliteTreeKind::#struct_name) {
+    //                     Some(Self{ inner: node })
+    //                 } else {
+    //                     None
+    //                 }
+    //             }
 
-                pub fn lhs_expr(&self) -> Option<Expr<'a>> {
-                    self.inner.valid_children().next().and_then(Expr::cast)
-                }
+    //             pub fn untyped(&self) -> N where N: Copy {
+    //                 self.inner
+    //             }
 
-                pub fn rhs_expr(&self) -> Option<Expr<'a>> {
-                    let mut child_iter = self.inner.valid_children();
+    //             pub fn lhs_expr(&self) -> Option<Expr<N>> {
+    //                 self.inner.valid_children().next().and_then(Expr::cast)
+    //             }
 
-                    // Navigate to operand, which will let us skip lhs expr
-                    child_iter.find(|it| it.tree() != Some(SqliteTreeKind::Expr));
+    //             pub fn rhs_expr(&self) -> Option<Expr<N>> {
+    //                 let mut child_iter = self.inner.valid_children();
 
-                    // Now navigate to navigate to next Expr node, which should be rhs
-                    child_iter.find_map(Expr::cast)
-                }
-            }
-        }
-    });
+    //                 // Navigate to operand, which will let us skip lhs expr
+    //                 child_iter.find(|it| it.tree() != Some(SqliteTreeKind::Expr));
+
+    //                 // Now navigate to navigate to next Expr node, which should be rhs
+    //                 child_iter.find_map(Expr::cast)
+    //             }
+    //         }
+    //     }
+    // });
 
     quote::quote! {
         #![allow(non_camel_case_types)]
 
-        pub use crate::{NodeId, CstNode, SqliteTokenKind, SqliteTreeKind, SqliteToken, CstNodeData};
+        use crate::{CstNodeTrait, SqliteTokenKind, SqliteTreeKind, SqliteTreeTag, SqliteToken, CstNodeDataKind};
         use crate::grammar::common::*;
         use super::manual::*;
+        use SqliteTreeKind as TreeKind;
+        use SqliteTokenKind as TokenKind;
 
         #(#enums)*
 
         #(#structs)*
-
-        #(#special_case_structs)*
     }
 }
 
@@ -568,6 +675,22 @@ fn remove_opt(mut rule: &Rule) -> &Rule {
     }
 
     rule
+}
+
+fn generic_args(generator: &AstGenerator, name: &str) -> proc_macro2::TokenStream {
+    if let Some(field_info) = generator.enums.get(name) {
+        if field_info.has_generic && field_info.has_lifetime {
+            quote! {N, 'a}
+        } else if field_info.has_generic {
+            quote! {N}
+        } else if field_info.has_lifetime {
+            quote! {'a}
+        } else {
+            unreachable!()
+        }
+    } else {
+        quote! { N }
+    }
 }
 
 fn convert_symbol_tokens(tk: &str) -> Option<&str> {
