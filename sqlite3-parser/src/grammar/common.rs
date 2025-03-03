@@ -34,7 +34,12 @@ pub(crate) const IDEN_SET: EnumSet<SqliteTokenKind> = enum_set!(
         | KW_IMMEDIATE
         | KW_INITIALLY
         | KW_INSTEAD
+
+        // Fat token LIKE_KW in sqlite(There are other fat tokens in here not labelled)
+        | KW_GLOB
         | KW_LIKE
+        | KW_REGEXP
+
         | KW_MATCH
         | KW_NO
         | KW_PLAN
@@ -87,8 +92,6 @@ pub(crate) const IDEN_SET: EnumSet<SqliteTokenKind> = enum_set!(
 
         // The following are not keywords and just regular words in SQLite, but to make parsing
         // easier we considered them keywords and therefore we must add them to this set here
-        | KW_TRUE
-        | KW_FALSE
         | KW_STORED
         | KW_ROWID
         | KW_STRICT
@@ -97,24 +100,10 @@ pub(crate) const IDEN_SET: EnumSet<SqliteTokenKind> = enum_set!(
 pub(crate) const JOIN_KEYWORDS: EnumSet<SqliteTokenKind> =
     enum_set!(KW_CROSS | KW_FULL | KW_INNER | KW_LEFT | KW_NATURAL | KW_OUTER | KW_RIGHT);
 
-pub(crate) const EXPR_LIT_START: EnumSet<SqliteTokenKind> = enum_set!(
-    HEX_LIT
-        | INT_LIT
-        | STR_LIT
-        | KW_TRUE
-        | KW_FALSE
-        | KW_CURRENT_TIME
-        | REAL_LIT
-        | KW_NULL
-        | KW_CURRENT_DATE
-        | KW_CURRENT_TIMESTAMP
-        | BLOB_LIT
-);
+pub(crate) const EXPR_LIT_START: EnumSet<SqliteTokenKind> = enum_set!(LITERAL_VALUE);
 
 pub(crate) const EXPR_PREFIX_START: EnumSet<SqliteTokenKind> =
     enum_set!(PLUS | MINUS | KW_NOT | TILDA);
-
-pub(crate) const EXPR_BIND_PARAM_START: EnumSet<SqliteTokenKind> = enum_set!(Q_MARK);
 
 pub(crate) const NUMERIC_LIT: EnumSet<SqliteTokenKind> = enum_set!(INT_LIT | REAL_LIT | HEX_LIT);
 
@@ -123,8 +112,9 @@ pub(crate) const LITERAL_VALUE: EnumSet<SqliteTokenKind> = enum_set!(
         | STR_LIT
         | BLOB_LIT
         | KW_NULL
-        | KW_TRUE
-        | KW_FALSE
         | KW_CURRENT_TIME
         | KW_CURRENT_DATE
+        | KW_CURRENT_TIMESTAMP
 );
+
+pub(crate) const TERM: EnumSet<SqliteTokenKind> = enum_set!(LITERAL_VALUE);
