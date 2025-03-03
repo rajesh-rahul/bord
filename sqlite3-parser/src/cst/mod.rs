@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)] // TODO: Make copy
 pub enum CstNodeDataKind {
-    Tree(SqliteTreeKind),
+    Tree(SqliteTreeKind, SqliteTreeTag),
     Token(SqliteToken),
     Error(ParseErrorKind),
 }
@@ -25,11 +25,23 @@ pub struct CstNodeData {
     pub kind: CstNodeDataKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteTreeTag {
+    NoTag,
+    Rhs,
+    Lhs,
+    When,
+    Then,
+    Target,
+    Low,
+    High,
+}
+
 impl std::default::Default for CstNodeData {
     fn default() -> Self {
         Self {
             relative_pos: Default::default(),
-            kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+            kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
         }
     }
 }
@@ -41,6 +53,7 @@ pub enum LexError {
     TrailingJunkAfterNumericLiteral,
     UnterminatedQuotedIdentifier,
     UnterminatedStringLiteral,
+    MalformedParam,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -112,9 +125,13 @@ pub trait CstTrait: std::fmt::Display {
         let mut events = Vec::new();
         let mut tokens = Vec::new();
 
-        helper(&mut events, &mut tokens, self.root());
+        to_events_helper(&mut events, &mut tokens, self.root());
 
         (events, tokens)
+    }
+
+    fn typed_ast<'a>(&'a self) -> crate::ast::File<Self::Node<'a>> {
+        crate::ast::File::cast(self.root()).unwrap()
     }
 
     fn build<'a>(
@@ -157,8 +174,12 @@ pub(crate) fn populate_cst<'a, T: CstMutTrait<'a>>(
 
     for (idx, event) in events[1..].iter().enumerate() {
         match event {
-            Event::Open { kind, close_idx } => {
-                assert!(matches!(events[idx + close_idx + 1], Event::Close));
+            Event::Open {
+                kind,
+                tag,
+                close_idx,
+            } => {
+                assert!(matches!(events[idx + close_idx + 1], Event::Close { .. }));
                 let capacity = if use_tree_capacity {
                     events[idx + 1..idx + close_idx + 1]
                         .iter()
@@ -168,7 +189,7 @@ pub(crate) fn populate_cst<'a, T: CstMutTrait<'a>>(
                     1
                 };
 
-                builder = builder.push_tree(*kind, capacity);
+                builder = builder.push_tree(*kind, *tag, capacity);
             }
             Event::Error(error) => {
                 builder = builder.push_error(error.clone(), 4);
@@ -198,19 +219,24 @@ fn build_comparable_node<'a>(node: impl CstNodeTrait<'a>) -> CompareCstNode {
     }
 }
 
-fn helper<'a>(events: &mut Vec<Event>, tokens: &mut Vec<SqliteToken>, node: impl CstNodeTrait<'a>) {
+fn to_events_helper<'a>(
+    events: &mut Vec<Event>,
+    tokens: &mut Vec<SqliteToken>,
+    node: impl CstNodeTrait<'a>,
+) {
     match &node.data().kind {
-        CstNodeDataKind::Tree(tree_kind) => {
-            let open_idx = events.len();
+        CstNodeDataKind::Tree(tree_kind, tag) => {
+            let start_idx = events.len();
             events.push(Event::Error(ParseErrorKind::UnknownTokens));
 
             for child in node.children() {
-                helper(events, tokens, child);
+                to_events_helper(events, tokens, child);
             }
 
-            let close_idx = events.len() - open_idx;
-            events[open_idx] = Event::Open {
+            let close_idx = events.len() - start_idx;
+            events[start_idx] = Event::Open {
                 kind: *tree_kind,
+                tag: *tag,
                 close_idx,
             };
             events.push(Event::Close);
@@ -223,7 +249,7 @@ fn helper<'a>(events: &mut Vec<Event>, tokens: &mut Vec<SqliteToken>, node: impl
             events.push(Event::Error(err.clone()));
 
             for child in node.children() {
-                helper(events, tokens, child);
+                to_events_helper(events, tokens, child);
             }
             events.push(Event::Close);
         }
@@ -233,7 +259,7 @@ fn helper<'a>(events: &mut Vec<Event>, tokens: &mut Vec<SqliteToken>, node: impl
 pub trait CstMutTrait<'a>: std::fmt::Debug {
     fn parent_mut(self) -> Self;
 
-    fn push_tree(self, tree: SqliteTreeKind, capacity: usize) -> Self;
+    fn push_tree(self, tree: SqliteTreeKind, tag: SqliteTreeTag, capacity: usize) -> Self;
 
     fn push_token(&mut self, token: SqliteToken);
 
@@ -276,7 +302,14 @@ where
 
     fn tree(&self) -> Option<SqliteTreeKind> {
         match &self.data().kind {
-            CstNodeDataKind::Tree(tree) => Some(*tree),
+            CstNodeDataKind::Tree(tree, _) => Some(*tree),
+            _ => None,
+        }
+    }
+
+    fn tag(&self) -> Option<SqliteTreeTag> {
+        match &self.data().kind {
+            CstNodeDataKind::Tree(_, tag) => Some(*tag),
             _ => None,
         }
     }
@@ -298,6 +331,11 @@ where
 
     fn find_children(&self, key: impl ChildNodeKey) -> impl Iterator<Item = Self> {
         key.find_children(*self)
+    }
+
+    fn find_child_by_tag(&self, tag: SqliteTreeTag) -> Option<Self> {
+        self.children()
+            .find(|it| matches!(it.tag(), Some(it) if it == tag))
     }
 
     // Iterate over earlier siblings (In insertion order)
@@ -349,7 +387,7 @@ where
 
     fn as_str(&self) -> &'static str {
         match &self.data().kind {
-            CstNodeDataKind::Tree(tree_kind) => tree_kind.as_str(),
+            CstNodeDataKind::Tree(tree_kind, _) => tree_kind.as_str(),
             CstNodeDataKind::Token(tk) => tk.kind.as_str(),
             CstNodeDataKind::Error(_) => "Error",
         }
@@ -473,7 +511,7 @@ impl SqliteToken {
 impl std::fmt::Display for CstNodeData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            CstNodeDataKind::Tree(tree_kind) => std::write!(f, "{:?}", tree_kind),
+            CstNodeDataKind::Tree(tree_kind, _) => std::write!(f, "{:?}", tree_kind),
             CstNodeDataKind::Token(SqliteToken {
                 kind: SqliteTokenKind::IDEN,
                 text,

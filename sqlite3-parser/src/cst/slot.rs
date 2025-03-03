@@ -2,7 +2,7 @@
 
 // use std::collections::FxHashMap;
 
-use itertools::{Either, Itertools};
+use either::Either;
 use slotmap::{DefaultKey, SecondaryMap};
 // use slab::Slab;
 // use slotmap::{SecondaryMap, SlotMap};
@@ -134,7 +134,7 @@ mod private {
             LinkedCstBranch {
                 data: tinyvec::tiny_vec![CstNodeData {
                     relative_pos: TextSize::new(0),
-                    kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+                    kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
                 }],
                 parents: Default::default(),
                 children: Default::default(),
@@ -404,12 +404,12 @@ impl SlotIncrSqlCst {
             //     && self.node(NodeId::new(branch_key, 0)).token().is_none())
         };
         let st = std::time::Instant::now();
-        let branches_to_remove = self
+        let branches_to_remove: Vec<_> = self
             .branches
             .iter_custom(Some(end_branch_key), Some(self.branches.tail()))
             .skip(1)
             .take_while(|branch_key| is_affected(*branch_key))
-            .collect_vec();
+            .collect();
 
         for branch_key in branches_to_remove {
             // println!("REmoved: {}", self.node(NodeId::new(branch_key, 0)));
@@ -455,7 +455,7 @@ impl CstTrait for SlotIncrSqlCst {
 
     fn root<'a>(&'a self) -> SlotCstNode<'a> {
         static ROOT: CstNodeData = CstNodeData {
-            kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+            kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
             relative_pos: TextSize::new(0),
         };
 
@@ -530,8 +530,13 @@ impl<'a> CstMutTrait<'a> for SlotCstMut<'a> {
         }
     }
 
-    fn push_tree(mut self, tree: SqliteTreeKind, capacity: usize) -> SlotCstMut<'a> {
-        let node_id = self.append(CstNodeDataKind::Tree(tree), capacity);
+    fn push_tree(
+        mut self,
+        tree: SqliteTreeKind,
+        tag: SqliteTreeTag,
+        capacity: usize,
+    ) -> SlotCstMut<'a> {
+        let node_id = self.append(CstNodeDataKind::Tree(tree, tag), capacity);
 
         self.node_mut(node_id)
     }
@@ -818,7 +823,10 @@ impl std::fmt::Debug for SlotIncrSqlCst {
                 f,
                 "{branch_key:?}({}) -> [{}]",
                 u32::from(self.branch_positions[branch_key]),
-                (0..branch.len()).map(|idx| branch.data(idx)).join(", ")
+                (0..branch.len())
+                    .map(|idx| branch.data(idx).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )?;
         }
         writeln!(
@@ -832,7 +840,7 @@ impl std::fmt::Debug for SlotIncrSqlCst {
             self.branches
                 .iter()
                 .map(|key| self.branch_positions[key])
-                .collect_vec()
+                .collect::<Vec<_>>()
         )?;
         Ok(())
     }

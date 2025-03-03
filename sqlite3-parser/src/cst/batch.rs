@@ -3,7 +3,9 @@ use tinyvec::TinyVec;
 
 use crate::{ParseErrorKind, SqliteTreeKind};
 
-use super::{CstMutTrait, CstNodeData, CstNodeDataKind, CstNodeTrait, CstTrait, SqliteToken};
+use super::{
+    CstMutTrait, CstNodeData, CstNodeDataKind, CstNodeTrait, CstTrait, SqliteToken, SqliteTreeTag,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct NodeId(u32);
@@ -52,7 +54,7 @@ impl CstTrait for SqlCst {
         cst.push(
             CstNodeData {
                 relative_pos: TextSize::new(0),
-                kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+                kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
             },
             NodeId(0),
         );
@@ -240,8 +242,13 @@ impl<'a> CstMutTrait<'a> for CstMut<'a> {
     }
 
     #[inline(always)]
-    fn push_tree(mut self, tree: SqliteTreeKind, _capacity: usize) -> CstMut<'a> {
-        let new_node_id = self.append(CstNodeDataKind::Tree(tree));
+    fn push_tree(
+        mut self,
+        tree: SqliteTreeKind,
+        tag: SqliteTreeTag,
+        _capacity: usize,
+    ) -> CstMut<'a> {
+        let new_node_id = self.append(CstNodeDataKind::Tree(tree, tag));
 
         CstMut {
             id: new_node_id,

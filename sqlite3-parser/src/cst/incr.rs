@@ -1,6 +1,6 @@
 //! Initally based on: https://github.com/mamcx/tree-flat
 
-use itertools::{Either, Itertools};
+use either::Either;
 use text_size::TextSize;
 use tinyvec::TinyVec;
 
@@ -97,7 +97,7 @@ mod private {
             CstBranch::Tree {
                 data: vec![CstNodeData {
                     relative_pos: TextSize::new(0),
-                    kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+                    kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
                 }],
                 parents: Vec::new(),
                 children: Vec::new(),
@@ -423,7 +423,7 @@ impl CstTrait for IncrSqlCst {
 
     fn root<'a>(&'a self) -> IncrCstNode<'a> {
         static ROOT: CstNodeData = CstNodeData {
-            kind: CstNodeDataKind::Tree(SqliteTreeKind::File),
+            kind: CstNodeDataKind::Tree(SqliteTreeKind::File, SqliteTreeTag::NoTag),
             relative_pos: TextSize::new(0),
         };
 
@@ -473,8 +473,13 @@ impl<'a> CstMutTrait<'a> for IncrCstMut<'a> {
     }
 
     #[inline(always)]
-    fn push_tree(mut self, tree: SqliteTreeKind, capacity: usize) -> IncrCstMut<'a> {
-        let fat_id = self.append(CstNodeDataKind::Tree(tree), capacity);
+    fn push_tree(
+        mut self,
+        tree: SqliteTreeKind,
+        tag: SqliteTreeTag,
+        capacity: usize,
+    ) -> IncrCstMut<'a> {
+        let fat_id = self.append(CstNodeDataKind::Tree(tree, tag), capacity);
 
         self.cst.node_mut(fat_id)
     }
@@ -495,6 +500,7 @@ impl<'a> CstMutTrait<'a> for IncrCstMut<'a> {
 }
 
 impl<'a> IncrCstNode<'a> {
+    #[inline(always)]
     fn offset(&self) -> TextSize {
         self.cst.branch_positions[self.fat_id.branch_id]
     }
@@ -517,7 +523,7 @@ impl<'a> IncrCstNode<'a> {
 
         // Don't skip ourselves. Because if we are a token node, then we are what we are looking for
         self.me_and_descendants()
-            .skip_while(|it| !allow_trivial && it.is_trivia())
+            .filter(|it| allow_trivial || it.token().is_some_and(|it| !it.is_trivia()))
             .next()
             .map(|it| it.data.relative_pos + it.offset())
             .unwrap_or(self.offset() + self.data.relative_pos)
@@ -540,7 +546,7 @@ impl<'a> IncrCstNode<'a> {
     fn end_pos_configurable(&self, allow_trivial: bool) -> TextSize {
         self.me_and_descendants()
             .rev()
-            .skip_while(|it| !allow_trivial && it.is_trivia())
+            .filter(|it| allow_trivial || it.token().is_some_and(|it| !it.is_trivia()))
             .next()
             .map(|it| {
                 if let Some(tk) = it.token() {
@@ -725,7 +731,8 @@ impl std::fmt::Debug for IncrSqlCst {
                 "{} -> [{}]",
                 u32::from(self.branch_positions[branch_id]),
                 (0..branch.len())
-                    .map(|id| branch.data(NodeId::new(id)))
+                    .map(|id| branch.data(NodeId::new(id)).to_string())
+                    .collect::<Vec<_>>()
                     .join(", ")
             )?;
         }
