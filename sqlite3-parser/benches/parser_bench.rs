@@ -11,7 +11,7 @@ fn parser_benchmark(c: &mut Criterion) {
 
     let input_sql = include_str!("../../test_schema.sql");
 
-    group.bench_with_input("Bord Parser - SlotMapCST", input_sql, |b, s| {
+    group.bench_with_input("Bord Parser - SlotMap CST", input_sql, |b, s| {
         b.iter(|| {
             let _cst: slot::SlotIncrSqlCst = bord_sqlite3_parser::parse(s);
             // assert!(cst.errors().next().is_none());
