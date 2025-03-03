@@ -35,3 +35,6 @@ test:
 
 flamegraph:
     cargo flamegraph --root --bench parser_bench -- --bench
+
+official_test:
+    cargo test --package bord-sqlite3-parser --test outside_tests --all-features -- test_from_corpus --exact --show-output
