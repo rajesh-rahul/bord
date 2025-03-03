@@ -67,14 +67,14 @@ FullPragmaName =
 
 // TODO: How is "yes" resolved to 1?; Also, this may not be correct
 PragmaValue = 
-    SignedNumber | PragmaValueName | 'STR_LIT'
+    SignedNumber | PragmaValueName | 'KW_ON' | 'KW_DELETE' | 'KW_DEFAULT'
 
 ReIndexStmt =
     'KW_REINDEX' target: (TableOrIdxOrCollationName | TableOrIdxNameWithSchema)?
 
 // collation name is a superset of name so we can just say $COLLATION_NAME below
 TableOrIdxOrCollationName =
-    '$COLLATION_NAME'
+    value: '$COLLATION_NAME'
 
 ReleaseStmt =
     'KW_RELEASE' 'KW_SAVEPOINT'? SavepointName
@@ -90,8 +90,8 @@ SavepointStmt =
 
 CreateTriggerStmt = 
     'KW_CREATE' temporary: ('KW_TEMP' | 'KW_TEMPORARY')? 'KW_TRIGGER' IfNotExists?
-    FullTriggerName trigger_when: ('KW_BEFORE' | 'KW_AFTER' | TriggerInsteadOf)
-    TriggerActionKind  'KW_ON' TableName TriggerForEachRow? TriggerWhenExpr?
+    FullTriggerName trigger_when: ('KW_BEFORE' | 'KW_AFTER' | TriggerInsteadOf)?
+    TriggerActionKind  'KW_ON' FullTableName TriggerForEachRow? TriggerWhenExpr?
     'KW_BEGIN' TriggerBodyStmtList 'KW_END'
 
 FullTriggerName = 
@@ -119,7 +119,7 @@ TriggerBodyStmtList =
     TriggerBodyStmt items: (';' TriggerBodyStmt)* ';'
 
 TriggerBodyStmt = 
-    UpdateStmt | InsertStmt | DeleteStmt | SelectStmt
+    UpdateStmt | InsertStmt | DeleteStmt | SelectStmtWithCte
 
 CreateViewStmt = 
     'KW_CREATE' temporary: ('KW_TEMP' | 'KW_TEMPORARY')? 'KW_VIEW' IfNotExists? 
@@ -180,7 +180,7 @@ InsertValuesClause =
     'KW_VALUES' ExprList expr_lists: (',' ExprList)* upsert_clauses: UpsertClause*
 
 InsertSelectClause =
-    SelectStmtWithCte UpsertClause?
+    SelectStmtWithCte upsert_clauses: UpsertClause*
 
 InsertDefaultValuesClause =
     'KW_DEFAULT' 'KW_VALUES'
@@ -200,6 +200,8 @@ UpsertClauseConflictTarget =
 ExprList = 
     '(' Expr items: (',' Expr)* ')'
 
+EmptyableExprList = 
+    '(' Expr? items: (',' Expr)* ')'
 
 OrderByClause = 
     'KW_ORDER' 'KW_BY' OrderingTermList
@@ -266,7 +268,7 @@ IfNotExists =
     'KW_IF' 'KW_NOT' 'KW_EXISTS'
 
 TableDetails = 
-    '(' ColumnDef columns: (',' ColumnDef)* table_constraints: (',' TableConstraint)* ')' TableOptionsList?
+    '(' ColumnDef columns: (',' ColumnDef)* table_constraints: (','? TableConstraint)* ')' TableOptionsList?
 
 TableOptionsList = 
     TableOptions items: (',' TableOptions)*
@@ -279,10 +281,10 @@ TableOptWithoutRowId =
 
 TableConstraint =
     ('KW_CONSTRAINT' ConstraintName)? 
-    table_constraint_kind: (TablePkConstraint | TableUqConstraint | CheckConstraint | TableFkConstraint)
+    table_constraint_kind: (TablePkConstraint | TableUqConstraint | CheckConstraint | TableFkConstraint)?
 
 TablePkConstraint = 
-    'KW_PRIMARY' 'KW_KEY' IndexedColList ConflictClause?
+    'KW_PRIMARY' 'KW_KEY' '(' IndexedCol columns: (',' IndexedCol)* auto_increment: 'KW_AUTOINCREMENT'? ')' ConflictClause?
 
 TableUqConstraint = 
     'KW_UNIQUE' IndexedColList ConflictClause?
@@ -329,7 +331,7 @@ IndexedColList =
     '(' IndexedCol items: (',' IndexedCol)* ')'
 
 IndexedCol = 
-    index_column: (ColumnName| Expr)  Collation? Order?
+    index_column: Expr Collation? Order?
 
 Collation = 
     'KW_COLLATE' CollationName
@@ -354,7 +356,7 @@ TraditionalSelect =
     WhereClause? GroupByClause? HavingClause? WindowClause?
 
 ValuesSelect = 
-    'KW_VALUES' ExprList
+    'KW_VALUES' ExprList expr_lists: (',' ExprList)*
 
 SelectStmt =
     SelectCore compound_selects: (CompoundSelect*) OrderByClause? LimitClause?
@@ -436,30 +438,14 @@ FrameSpecFollowing =
     Expr 'KW_FOLLOWING'
 
 TableOrSubquery =
-    QualifiedTableName | FromClauseTableValueFunction | FromClauseSelectStmt | ('(' JoinClause ')') | ('(' TableOrSubquery ')')
+    table_or_subquery_kind: (QualifiedTableName | FromClauseTableValueFunction | '(' SelectStmtWithCte ')' | ('(' JoinClause ')') | ('(' TableOrSubquery ')'))
+    WithAlias?
 
 FromClauseTableValueFunction =
-    FullTableFunctionName ExprList WithAlias?
-
-FromClauseSelectStmt = 
-    '(' SelectStmtWithCte ')' WithAlias?
-
-// NestedTableOrSubquery =
-//     '(' (TableOrSubqueryList | JoinClause) ')'
-
-// TableOrSubqueryList = TableOrSubquery items: (',' TableOrSubquery)*
-
-// JoinClause =
-//     left: TableOrSubquery JoinClauseRightSide*
-
-// JoinClauseRightSide =
-//     JoinOperator right: TableOrSubquery JoinConstraint?
+    FullTableFunctionName EmptyableExprList
 
 JoinClause =
-    (left_operand: (TableOrSubquery | JoinClause) JoinOperator right_operand: (TableOrSubquery | JoinClause) JoinConstraint?) 
-
-// JoinClauseRightSide =
-//     JoinOperator right: TableOrSubquery JoinConstraint?
+    left_operand: (TableOrSubquery | JoinClause) JoinOperator right_operand: (TableOrSubquery | JoinClause) JoinConstraint?
 
 JoinConstraint = 
     OnConstraint | UsingConstraint
@@ -470,29 +456,9 @@ OnConstraint =
 UsingConstraint =
     'KW_USING' ColNameList
 
+// NOTE: JoinOperator specified in here is too permissive. Actual parser impl matches that of SQLite
 JoinOperator = 
-    CommaJoin | NonCommaJoin
-
-CommaJoin = 
-    ','
-
-NonCommaJoin = 
-    (CrossJoin | OuterJoin | InnerJoin | NaturalJoin | Join)
-
-Join =
-    'KW_JOIN'
-
-CrossJoin =
-    'KW_CROSS' 'KW_JOIN'
-
-OuterJoin  =
-    outer_join_kind: ('KW_LEFT' | 'KW_RIGHT' | 'KW_FULL') 'KW_OUTER'? 'KW_JOIN'
-
-InnerJoin = 
-    natural: 'KW_INNER' 'KW_JOIN'
-
-NaturalJoin =
-    'KW_NATURAL' natural_join_kind: (InnerJoin | OuterJoin | Join)
+    ',' | ('$ANY_JOIN_KW'? '$ANY_JOIN_KW'? '$ANY_JOIN_KW'? 'KW_JOIN')
 
 ResultColumn = 
     ResultColumnExpr | ResultColumnAll | ResultColumnTableAll
@@ -511,14 +477,14 @@ ColumnDef =
 
 ColumnConstraint = 
     ColumnConstraintName? 
-    constraint_type: (PrimaryConstraint | NotNullConstraint | UniqueConstraint | CheckConstraint | DefaultConstraint | Collation | ColumnGenerated)
+    constraint_type: (PrimaryConstraint | NullConstraint | UniqueConstraint | CheckConstraint | DefaultConstraint | Collation | ColumnGenerated | FkClause)
 
 ColumnConstraintName = 
     'KW_CONSTRAINT' ConstraintName
 
 PrimaryConstraint = 
     'KW_PRIMARY' 'KW_KEY' 
-    primary_constraint_order: ('KW_ASC' | 'KW_DESC')?
+    Order?
     ConflictClause?
     auto_increment: 'KW_AUTOINCREMENT'?
 
@@ -528,8 +494,8 @@ ConflictClause =
 ConflictAction = 
     'KW_ROLLBACK' | 'KW_ABORT' | 'KW_FAIL' | 'KW_IGNORE' | 'KW_REPLACE'
 
-NotNullConstraint = 
-    'KW_NOT' 'KW_NULL' ConflictClause?
+NullConstraint = 
+    is_not_null: 'KW_NOT'? 'KW_NULL' ConflictClause?
 
 UniqueConstraint = 
     'KW_UNIQUE' ConflictClause?
@@ -538,13 +504,17 @@ CheckConstraint =
     'KW_CHECK' '(' Expr ')'
 
 DefaultConstraint = 
-    'KW_DEFAULT' default_value_kind: (DefaultConstraintExpr | DefaultConstraintLiteral | SignedNumber)
+    'KW_DEFAULT' default_value_kind: (DefaultConstraintExpr | DefaultConstraintLiteral | DefaultConstraintIden)
 
 DefaultConstraintExpr = 
     '(' Expr ')'
 
 DefaultConstraintLiteral = 
+    plus_or_minus: ('+' | '-')?
     value: '$LITERAL_VALUE'
+
+DefaultConstraintIden =
+    value: 'IDEN'
 
 ColumnGenerated = 
     ('KW_GENERATED' 'KW_ALWAYS')? 'KW_AS' '(' Expr ')' ColumnGeneratedKind?
@@ -554,16 +524,16 @@ ColumnGeneratedKind =
 
 Expr = 
     ExprParen | ExprLit | ExprColumnName | ExprPrefix | ExprPostfix | ExprInfix | ExprBindParam
-    | ExprFunc | ExprSelect | ExprList | ExprCast | ExprCase | RaiseFunc
+    | ExprFunc | ExprExistsSelect | ExprList | ExprCast | ExprCase | RaiseFunc | ExprSelect
 
 ExprCast = 
     'KW_CAST' '(' Expr 'KW_AS' TypeName ')'
 
 ExprLit = 
     'INT_LIT' | 'HEX_LIT' | 'STR_LIT' | 'REAL_LIT' | 'BLOB_LIT' | 'KW_NULL' 
-    | 'KW_TRUE' | 'KW_FALSE' | 'KW_CURRENT_TIME' | 'KW_CURRENT_DATE' | 'KW_CURRENT_TIMESTAMP'
+    | 'KW_CURRENT_TIME' | 'KW_CURRENT_DATE' | 'KW_CURRENT_TIMESTAMP'
 
-InSelect =
+ExprSelect =
      '(' SelectStmtWithCte ')'
 
 InTable =
@@ -573,9 +543,9 @@ InTableFunc =
     FullTableFunctionName '(' Expr? items: (',' Expr)* ')'
 
 ExprBindParam = 
-    '?'
+    'PARAM'
 
-ExprSelect =
+ExprExistsSelect =
     not: 'KW_NOT'? 'KW_EXISTS'? '(' SelectStmtWithCte ')'
 
 ExprCase = 
@@ -591,7 +561,7 @@ CaseElseClause =
     'KW_ELSE' Expr
 
 CaseWhenClause =
-    'KW_WHEN' when_expr: Expr 'KW_THEN' then_expr: Expr
+    'KW_WHEN' __when: Expr 'KW_THEN' __then: Expr
 
 ExprFunc =
     FunctionName '(' FuncArguments? ')' FilterClause? OverClause?
@@ -625,7 +595,7 @@ FuncArguments =
     ArgExpr | ArgStar
 
 ArgExpr =
-    distinct: 'KW_DISTINCT'? Expr items: (',' Expr)* OrderByClause?
+    distinct: 'KW_DISTINCT'? Expr? items: (',' Expr)* OrderByClause?
 
 ArgStar = 
     '*'
@@ -671,125 +641,125 @@ ExprInfix =
     | OpSubtract | OpBinAnd | OpBinOr | OpBinLShift | OpBinRShift | OpLT | OpGT | OpLTE
     | OpGTE | OpEq | OpNotEq | OpAnd | OpOr | OpMatch | OpLike | OpRegexp | OpGlob
     | OpBetweenAnd | OpNotMatch | OpNotLike | OpNotRegexp | OpNotGlob | OpNotBetweenAnd
-    | OpIsNotDistinctFrom | OpIsDistinctFrom | OpIsNot | OpIs | OpIn
+    | OpIsNotDistinctFrom | OpIsDistinctFrom | OpIsNot | OpIs | OpIn | OpNotIn
 
 OpEscape =
-    'KW_ESCAPE' escape: 'STR_LIT'
+    'KW_ESCAPE' Expr
 
 // TODO: SQLite spec actually allow an expr here but we will only support string literals for now
 OpNotLike = 
-    'KW_NOT' 'KW_LIKE' Expr ('KW_ESCAPE' escape: 'STR_LIT')?
+    __lhs: Expr 'KW_NOT' 'KW_LIKE' __rhs: Expr ('KW_ESCAPE' escape: 'STR_LIT')?
 
 OpNotBetweenAnd = 
-    target: Expr 'KW_NOT' 'KW_BETWEEN' low: Expr 'KW_AND' high: Expr
+    __target: Expr 'KW_NOT' 'KW_BETWEEN' __low: Expr 'KW_AND' __high: Expr
 
 OpBetweenAnd = 
-    target: Expr 'KW_BETWEEN' low: Expr 'KW_AND' high: Expr
+    __target: Expr 'KW_BETWEEN' __low: Expr 'KW_AND' __high: Expr
 
 OpConcat =
-    lhs: Expr '||' rhs: Expr
+    __lhs: Expr '||' __rhs: Expr
 
 OpExtractOne =
-    lhs: Expr '->' rhs: Expr
+    __lhs: Expr '->' __rhs: Expr
 
 OpExtractTwo =
-    lhs: Expr '->>' rhs: Expr
+    __lhs: Expr '->>' __rhs: Expr
 
 OpMultiply =
-    lhs: Expr '*' rhs: Expr
+    __lhs: Expr '*' __rhs: Expr
 
 OpDivide =
-    lhs: Expr '/' rhs: Expr
+    __lhs: Expr '/' __rhs: Expr
 
 OpModulus =
-    lhs: Expr '%' rhs: Expr
+    __lhs: Expr '%' __rhs: Expr
 
 OpAdd =
-    lhs: Expr '+' rhs: Expr
+    __lhs: Expr '+' __rhs: Expr
 
 OpSubtract =
-    lhs: Expr '-' rhs: Expr
+    __lhs: Expr '-' __rhs: Expr
 
 OpBinAnd =
-    lhs: Expr '&' rhs: Expr
+    __lhs: Expr '&' __rhs: Expr
 
 OpBinOr =
-    lhs: Expr '|' rhs: Expr
+    __lhs: Expr '|' __rhs: Expr
 
 OpBinLShift =
-    lhs: Expr '<<' rhs: Expr
+    __lhs: Expr '<<' __rhs: Expr
 
 OpBinRShift =
-    lhs: Expr '>>' rhs: Expr
+    __lhs: Expr '>>' __rhs: Expr
 
 OpLT =
-    lhs: Expr '<' rhs: Expr
+    __lhs: Expr '<' __rhs: Expr
 
 OpGT =
-    lhs: Expr '>' rhs: Expr
+    __lhs: Expr '>' __rhs: Expr
 
 OpLTE =
-    lhs: Expr '<=' rhs: Expr
+    __lhs: Expr '<=' __rhs: Expr
 
 OpGTE =
-    lhs: Expr '>=' rhs: Expr
+    __lhs: Expr '>=' __rhs: Expr
 
 OpEq =
-    lhs: Expr ('=' | '==') rhs: Expr
+    __lhs: Expr ('=' | '==') __rhs: Expr
 
 OpNotEq =
-    lhs: Expr ('!=' | '<>') rhs: Expr
+    __lhs: Expr ('!=' | '<>') __rhs: Expr
 
 OpAnd =
-    lhs: Expr 'KW_AND' rhs: Expr
+    __lhs: Expr 'KW_AND' __rhs: Expr
 
 OpOr =
-    lhs: Expr 'KW_OR' rhs: Expr
+    __lhs: Expr 'KW_OR' __rhs: Expr
 
 OpMatch =
-    lhs: Expr 'KW_MATCH' rhs: Expr
+    __lhs: Expr 'KW_MATCH' __rhs: Expr
 
 OpRegexp =
-    lhs: Expr 'KW_REGEXP' rhs: Expr
+    __lhs: Expr 'KW_REGEXP' __rhs: Expr
 
 OpGlob =
-    lhs: Expr 'KW_GLOB' rhs: Expr
+    __lhs: Expr 'KW_GLOB' __rhs: Expr
 
 OpIs =
-    lhs: Expr 'KW_IS' rhs: Expr
+    __lhs: Expr 'KW_IS' __rhs: Expr
 
 OpLike = 
-    lhs: Expr 'KW_LIKE' rhs: Expr OpEscape?
+    __lhs: Expr 'KW_LIKE' __rhs: Expr OpEscape?
 
 OpIn =
-    lhs: Expr 'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
+    lhs: Expr 'KW_IN' in_expr_kind: (EmptyableExprList | ExprSelect | InTableFunc | InTable)
 
 OpNotIn =
-    not: 'KW_NOT' 'KW_IN' in_expr_kind: (ExprList | InSelect | InTableFunc | InTable)
+    lhs: Expr 'KW_NOT' 'KW_IN' in_expr_kind: (EmptyableExprList | ExprSelect | InTableFunc | InTable)
 
 OpIsDistinctFrom = 
-    lhs: Expr  'KW_IS' 'KW_DISTINCT' 'KW_FROM' rhs: Expr
+    __lhs: Expr  'KW_IS' 'KW_DISTINCT' 'KW_FROM' __rhs: Expr
 
 OpIsNotDistinctFrom = 
-    lhs: Expr  'KW_IS' 'KW_NOT' 'KW_DISTINCT' 'KW_FROM' rhs: Expr
+    __lhs: Expr  'KW_IS' 'KW_NOT' 'KW_DISTINCT' 'KW_FROM' __rhs: Expr
 
 OpNotMatch = 
-    lhs: Expr  'KW_NOT' 'KW_MATCH' rhs: Expr
+    __lhs: Expr  'KW_NOT' 'KW_MATCH' __rhs: Expr
 
 OpNotRegexp = 
-    lhs: Expr  'KW_NOT' 'KW_REGEXP' rhs: Expr
+    __lhs: Expr  'KW_NOT' 'KW_REGEXP' __rhs: Expr
 
 OpNotGlob = 
-    lhs: Expr  'KW_NOT' 'KW_GLOB' rhs: Expr
+    __lhs: Expr  'KW_NOT' 'KW_GLOB' __rhs: Expr
 
 OpIsNot = 
-    lhs: Expr  'KW_IS' 'KW_NOT' rhs: Expr
+    __lhs: Expr  'KW_IS' 'KW_NOT' __rhs: Expr
 
 TypeName = 
     TypeNameWord words: TypeNameWord* 
-    ('(' left: SignedNumber (',' right: SignedNumber)? ')')?
+    ('(' __lhs: SignedNumber (',' __rhs: SignedNumber)? ')')?
 
-SignedNumber = number_sign: ('+' | '-')? number: '$NUMERIC_LIT'
+SignedNumber = plus_or_minus: ('+' | '-')? number: '$NUMERIC_LIT'
 
 TypeNameWord = 
     value: '$NAME'
@@ -870,7 +840,7 @@ DbNameExpr =
     Expr
 
 CollationName =
-    '$COLLATION_NAME'
+    value: '$COLLATION_NAME'
 
 SchemaOrIdxOrTableName = 
-    '$NAME'
+    value: '$NAME'
