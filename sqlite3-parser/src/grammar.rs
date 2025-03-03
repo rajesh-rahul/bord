@@ -11,6 +11,11 @@ use enumset::{enum_set, EnumSet};
 type TokenSet = enumset::EnumSet<SqliteTokenKind>;
 use utils::*;
 
+// `r` stands for recovery set
+// `p` stands for parser
+// `lr` stands for local recovery set
+// NOTE: Current recovery mechanism is being reconsidered slightly
+
 #[macro_export]
 macro_rules! expected_one_of {
     ($parser:expr, $recover:expr, [$($item:expr $(,)? )*]) => {
