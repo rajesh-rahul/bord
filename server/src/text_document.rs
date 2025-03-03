@@ -1,12 +1,12 @@
 use crate::{from_lsp, BordLangServer};
 use async_lsp::lsp_types::{self as lsp};
 use bord_sqlite3_parser::{
-    batch, incr, incremental_parse2, parse, parse_with_abs_pos, CstNodeTrait, CstTrait,
-    ModifiedBranchesInfo, TextPatch, TextPatchKind,
+    batch, incr, incremental_parse2, parse, parse_with_abs_pos, CstNodeTrait, CstTrait, TextPatch,
+    TextPatchKind,
 };
 use line_index::LineIndex;
 use rusqlite::Connection;
-use text_size::TextSize;
+use text_size::{TextRange, TextSize};
 
 #[derive(Debug)]
 pub enum TextDocumentCstKind {
@@ -31,7 +31,7 @@ pub struct TextDocument {
     // TODO: Add lsp's language id info
     pub(crate) cst: TextDocumentCstKind,
 
-    pub(crate) errors: Vec<Vec<lsp::Diagnostic>>,
+    pub(crate) errors: Vec<lsp::Diagnostic>,
     // pub(crate) flycheck_errors: Vec<Option<FlycheckError>>,
 }
 
@@ -126,10 +126,11 @@ impl TextDocument {
                         let new_cst = incremental_parse2(relex_input, text_patch);
                         cst.merge_cst(new_cst, text_patch);
                         tracing::info!("Incremental Parse Time: {}", start.elapsed().as_micros());
-
+                        // eprintln!("{cst}");
                         let start = std::time::Instant::now();
                         let batch_cst: batch::SqlCst = parse(&self.contents);
                         eprintln!("Normal Parse Time: {}", start.elapsed().as_micros());
+                        // eprintln!("{batch_cst}");
                         assert_eq!(cst.root().comparable(), batch_cst.root().comparable());
                     }
                     // No range indicates the given text represents the entire document
@@ -167,69 +168,55 @@ impl TextDocument {
         Ok(())
     }
 
-    pub fn update_errors(
-        &mut self,
-        mod_info: ModifiedBranchesInfo,
-        conn: &Connection,
-    ) -> anyhow::Result<()> {
-        todo!();
-        // let start = mod_info.splice_range.start;
-        // let end = start + mod_info.num_new_branches;
+    pub fn update_errors(&mut self, conn: &Connection) -> anyhow::Result<()> {
+        let errors = match &self.cst {
+            TextDocumentCstKind::FullSqlFile(incr_sql_cst) => incr_sql_cst
+                .root()
+                .me_and_descendants()
+                .filter(|it| it.error().is_some())
+                .map(|it| {
+                    let mut range = from_lsp::node_lsp_range(&self.line_index, &it).unwrap();
+                    range.end = range.start;
+                    lsp::Diagnostic {
+                        range,
+                        severity: Some(lsp::DiagnosticSeverity::ERROR),
+                        message: format!("{:?}", it.error().unwrap()),
+                        source: Some("bordsql".into()),
+                        ..Default::default()
+                    }
+                })
+                .collect(),
+            TextDocumentCstKind::NonSqlFile { csts, lang_id } => csts
+                .iter()
+                .flat_map(|it| {
+                    it.root()
+                        .me_and_descendants()
+                        .filter(|it| it.error().is_some())
+                        .map(|it| {
+                            let range = from_lsp::lsp_range(
+                                &self.line_index,
+                                TextRange::new(
+                                    it.start_pos_skip_trivia(),
+                                    it.end_pos_skip_trivia(),
+                                )
+                                .into(),
+                            )
+                            .unwrap();
 
-        // let updated_errors = (start..end).map(|branch_id| {
-        //     let root_node = self.cst.node(incr::NodeId::new(branch_id, 0));
+                            lsp::Diagnostic {
+                                range,
+                                severity: Some(lsp::DiagnosticSeverity::ERROR),
+                                message: format!("{:?}", it.error().unwrap()),
+                                source: Some("bordsql".into()),
+                                ..Default::default()
+                            }
+                        })
+                })
+                .collect(),
+        };
+        // The extend is required when multi-cursor edits happen
+        self.errors = errors;
 
-        //     let mut errors = Vec::new();
-
-        //     let parse_errors = root_node
-        //         .me_and_descendants()
-        //         .filter(|it| it.error().is_some())
-        //         .map(|it| {
-        //             let range = from_lsp::node_lsp_range(&self.line_index, &it).unwrap();
-
-        //             lsp::Diagnostic {
-        //                 range,
-        //                 severity: Some(lsp::DiagnosticSeverity::ERROR),
-        //                 message: format!("{:?}", it.error().unwrap()),
-        //                 source: Some("bordsql".into()),
-        //                 ..Default::default()
-        //             }
-        //         });
-
-        //     errors.extend(parse_errors);
-
-        //     // Only do fly check if we do not have any parse errors and if the current root node is a statement
-        //     if errors.is_empty() && root_node.tree() == Some(SqliteTreeKind::Statement) {
-        //         let text_start = root_node.start_pos_skip_trivia();
-        //         let text_end = root_node.end_pos_skip_trivia();
-
-        //         let range = from_lsp::lsp_range(
-        //             &self.line_index,
-        //             TextRange::new(text_start.try_into().unwrap(), text_end.try_into().unwrap()),
-        //         )
-        //         .unwrap();
-
-        //         if let Err(err) = check_statement(conn, &self.contents[text_start..text_end]) {
-        //             errors.push(lsp::Diagnostic {
-        //                 range,
-        //                 severity: Some(lsp::DiagnosticSeverity::ERROR),
-        //                 message: err,
-        //                 source: Some("bordsql".into()),
-        //                 ..Default::default()
-        //             });
-        //         }
-        //     }
-
-        //     errors
-        // });
-
-        // // The extend is required when multi-cursor edits happen
-        // self.errors.extend(
-        //     std::iter::repeat(Vec::new())
-        //         .take(mod_info.splice_range.end.saturating_sub(self.errors.len())),
-        // );
-        // self.errors.splice(mod_info.splice_range, updated_errors);
-
-        // Ok(())
+        Ok(())
     }
 }

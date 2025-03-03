@@ -50,7 +50,7 @@ pub fn lsp_range(line_index: &LineIndex, range: TextRange) -> anyhow::Result<lsp
 
     let end = lsp::Position {
         line: end_pos.line,
-        character: end_pos.col + 1,
+        character: end_pos.col,
     };
 
     Ok(lsp::Range { start, end })

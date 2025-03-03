@@ -105,7 +105,7 @@ pub(crate) fn create_completion_context<Cst: CstTrait>(cst: &Cst, cursor: TextSi
                 Some((
                     node,
                     CstNodeData {
-                        kind: CstNodeDataKind::Tree(_),
+                        kind: CstNodeDataKind::Tree(_, _),
                         ..
                     },
                 )) if node.as_str() == name => {
@@ -476,7 +476,9 @@ fn make_completions(
             if !seen_nodes.contains(&node_data.name) {
                 seen_nodes.insert(node_data.name.clone());
 
-                if ["Expr", "TableOrSubquery", "JoinClause"].contains(&node_data.name.as_str()) {
+                if ["Expr", "TableOrSubquery", "JoinClause", "JoinOperator"]
+                    .contains(&node_data.name.as_str())
+                {
                     completions.fuse_nodes();
                 } else if completions.can_add_new_path() {
                     let mut new_completions = CompletionNode::new_tree();

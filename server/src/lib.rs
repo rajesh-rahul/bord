@@ -79,15 +79,15 @@ fn did_change_text_document(
         }
     };
 
-    // doc.update_errors(mod_info, &server.flycheck_db.lock().unwrap())
-    //     .unwrap();
+    doc.update_errors(&server.flycheck_db.lock().unwrap())
+        .unwrap();
     // TODO: TERRIBLE! connection and flycheck need more work
     if let Err(err) =
         server
             .client
             .notify::<not::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
                 uri: doc_url,
-                diagnostics: doc.errors.iter().flatten().cloned().collect(),
+                diagnostics: doc.errors.clone(),
                 version: Some(doc.doc_version),
             })
     {
