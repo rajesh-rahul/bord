@@ -22,7 +22,7 @@ async fn run_incr_parser_usages() {
         .filter(|it| it.path().extension().is_some_and(|it| it == "log"))
         .collect::<Vec<_>>();
 
-    assert!(entries.len() == 9);
+    assert!(entries.len() == 10);
 
     for entry in entries {
         let traces = get_language_client_trace(entry.path());
