@@ -292,3 +292,64 @@ File {
     Error {
     }
 }
+%%
+SELECT 1 = a ISNULL FROM t3;
+
+File {
+    Statement {
+        StatementWithCte {
+            SelectStmt {
+                SelectCore {
+                    TraditionalSelect {
+                        "SELECT"
+                        ResultColumnList {
+                            ResultColumn {
+                                ResultColumnExpr {
+                                    Expr {
+                                        ExprPostfix {
+                                            OpIsNull {
+                                                Expr {
+                                                    ExprInfix {
+                                                        OpEq {
+                                                            Expr {
+                                                                ExprLit {
+                                                                    "1 - INT_LIT"
+                                                                }
+                                                            }
+                                                            "="
+                                                            Expr {
+                                                                ExprColumnName {
+                                                                    ColumnName {
+                                                                        "a - IDEN"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                "ISNULL"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        FromClause {
+                            "FROM"
+                            TableOrSubquery {
+                                QualifiedTableName {
+                                    FullTableName {
+                                        TableName {
+                                            "t3 - IDEN"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ";"
+}

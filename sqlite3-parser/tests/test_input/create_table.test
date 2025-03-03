@@ -144,7 +144,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -166,7 +166,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -188,7 +188,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -205,7 +205,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -216,15 +216,17 @@ File {
                         TablePkConstraint {
                             "PRIMARY"
                             "KEY"
-                            IndexedColList {
-                                "("
-                                IndexedCol {
-                                    ColumnName {
-                                        "actor_id - IDEN"
+                            "("
+                            IndexedCol {
+                                Expr {
+                                    ExprColumnName {
+                                        ColumnName {
+                                            "actor_id - IDEN"
+                                        }
                                     }
                                 }
-                                ")"
                             }
+                            ")"
                         }
                     }
                     ")"
@@ -268,7 +270,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -290,7 +292,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -307,7 +309,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -324,7 +326,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 Error {
                                 }
@@ -336,15 +338,17 @@ File {
                         TablePkConstraint {
                             "PRIMARY"
                             "KEY"
-                            IndexedColList {
-                                "("
-                                IndexedCol {
-                                    ColumnName {
-                                        "city_id - IDEN"
+                            "("
+                            IndexedCol {
+                                Expr {
+                                    ExprColumnName {
+                                        ColumnName {
+                                            "city_id - IDEN"
+                                        }
                                     }
                                 }
-                                ")"
                             }
+                            ")"
                         }
                     }
                     ","
@@ -444,7 +448,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -461,7 +465,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -483,7 +487,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -505,7 +509,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -546,7 +550,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -576,7 +580,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -593,7 +597,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -610,7 +614,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -621,15 +625,17 @@ File {
                         TablePkConstraint {
                             "PRIMARY"
                             "KEY"
-                            IndexedColList {
-                                "("
-                                IndexedCol {
-                                    ColumnName {
-                                        "customer_id - IDEN"
+                            "("
+                            IndexedCol {
+                                Expr {
+                                    ExprColumnName {
+                                        ColumnName {
+                                            "customer_id - IDEN"
+                                        }
                                     }
                                 }
-                                ")"
                             }
+                            ")"
                         }
                     }
                     ","
@@ -788,7 +794,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -810,7 +816,7 @@ File {
                             ")"
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -876,7 +882,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -920,7 +926,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -954,7 +960,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -1007,7 +1013,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -1072,7 +1078,7 @@ File {
                             }
                         }
                         ColumnConstraint {
-                            NotNullConstraint {
+                            NullConstraint {
                                 "NOT"
                                 "NULL"
                             }
@@ -1083,15 +1089,17 @@ File {
                         TablePkConstraint {
                             "PRIMARY"
                             "KEY"
-                            IndexedColList {
-                                "("
-                                IndexedCol {
-                                    ColumnName {
-                                        "film_id - IDEN"
+                            "("
+                            IndexedCol {
+                                Expr {
+                                    ExprColumnName {
+                                        ColumnName {
+                                            "film_id - IDEN"
+                                        }
                                     }
-                                }
-                                ")"
+                                } 
                             }
+                            ")"
                         }
                     }
                     ","
@@ -1249,7 +1257,7 @@ File {
                                             }
                                         }
                                         "IN"
-                                        ExprList {
+                                        EmptyableExprList {
                                             "("
                                             Expr {
                                                 ExprLit {
