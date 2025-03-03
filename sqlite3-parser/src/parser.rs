@@ -1,13 +1,12 @@
-use std::cell::Cell;
+use std::{cell::Cell, collections::VecDeque};
 
 use enumset::EnumSet;
 use text_size::TextSize;
 
 use crate::{
-    grammar::common::{
-        EXPR_BIND_PARAM_START, EXPR_LIT_START, EXPR_PREFIX_START, IDEN_SET, JOIN_KEYWORDS,
-    },
-    CstTrait, SqliteLexer, SqliteToken, SqliteTokenKind, SqliteTreeKind, SqliteVersion, T,
+    grammar::common::{EXPR_LIT_START, EXPR_PREFIX_START, IDEN_SET, JOIN_KEYWORDS},
+    CstTrait, SqliteLexer, SqliteToken, SqliteTokenKind, SqliteTreeKind, SqliteTreeTag,
+    SqliteVersion, T,
 };
 
 pub struct SqliteParser<T> {
@@ -36,13 +35,18 @@ pub struct SqliteParser<T> {
 
     pub(crate) expr_start: EnumSet<SqliteTokenKind>,
 
+    pub(crate) arg_expr_start: EnumSet<SqliteTokenKind>,
+
     pub(crate) with_alias_start: EnumSet<SqliteTokenKind>,
+
+    pub(crate) table_or_subquery_start: EnumSet<SqliteTokenKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Open {
         kind: SqliteTreeKind,
+        tag: SqliteTreeTag,
         close_idx: usize,
     },
     Error(ParseErrorKind),
@@ -84,7 +88,7 @@ impl Default for SqliteParseError {
 pub enum ParseErrorKind {
     ExpectedItems(Vec<ExpectedItem>),
     UnknownTokens,
-    // OtherError(String),
+    IllegalJoinOperator, // OtherError(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,8 +152,8 @@ pub trait Lexer {
     // fn second(&self) -> SqliteTokenKind;
     // fn third(&self) -> SqliteTokenKind;
     fn nth(&self, lookahead: usize) -> SqliteTokenKind;
-    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind>;
-    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken>;
+    // fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind>;
+    // fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken>;
     /// Returns how many tokens were eaten
     fn eat_trivia(&mut self) -> usize;
 
@@ -163,11 +167,52 @@ pub struct OnDemandLexer<'a>
 where
 // IA: Iterator<Item = SqliteToken> + Clone,
 {
-    inner: Cell<Option<itertools::PeekNth<SqliteLexer<'a>>>>,
+    inner: Cell<Option<PeekableLexer<'a>>>,
     all_tokens: Vec<SqliteToken>,
     fuel: Cell<u32>,
     curr_byte_len: TextSize,
     prev_non_triv_tk: Option<usize>,
+}
+
+// TODO: Room for optimization
+struct PeekableLexer<'a> {
+    queue: VecDeque<SqliteToken>,
+
+    lexer: SqliteLexer<'a>,
+}
+
+impl<'a> PeekableLexer<'a> {
+    fn new(lexer: SqliteLexer<'a>) -> Self {
+        Self {
+            queue: VecDeque::with_capacity(64),
+            lexer,
+        }
+    }
+
+    fn peek_nth(&mut self, idx: usize) -> Option<&SqliteToken> {
+        if idx < self.queue.len() {
+            Some(&self.queue[idx])
+        } else {
+            let peek_size = self.queue.len().abs_diff(idx + 1);
+            self.queue.extend((&mut self.lexer).take(peek_size));
+
+            self.queue.get(idx)
+        }
+    }
+
+    fn next_if(&mut self, go_to_next: fn(&SqliteToken) -> bool) -> Option<SqliteToken> {
+        if self.peek_nth(0).is_some_and(go_to_next) {
+            self.queue.pop_front()
+        } else {
+            None
+        }
+    }
+
+    fn next(&mut self) -> Option<SqliteToken> {
+        self.peek_nth(0);
+
+        self.queue.pop_front()
+    }
 }
 
 pub struct NormalLexer {
@@ -185,13 +230,12 @@ pub fn new_on_demand_lexer<'a>(text: &'a str, version: SqliteVersion) -> OnDeman
 
     OnDemandLexer::from(lexer.clone())
 }
-impl<'a> OnDemandLexer<'a>
-where
+impl<'a> From<SqliteLexer<'a>> for OnDemandLexer<'a>
 // IA: Iterator<Item = SqliteToken> + Clone,
 {
-    fn from(ia: SqliteLexer<'a>) -> Self {
+    fn from(value: SqliteLexer<'a>) -> Self {
         OnDemandLexer {
-            inner: Cell::new(Some(itertools::peek_nth(ia))),
+            inner: Cell::new(Some(PeekableLexer::new(value))),
             prev_non_triv_tk: None,
             curr_byte_len: TextSize::new(0),
             all_tokens: Vec::with_capacity(32),
@@ -314,19 +358,19 @@ where
         result
     }
 
-    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
-        let iter = self.inner.take().unwrap();
-        self.inner.set(Some(iter.clone()));
+    // fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
+    //     let iter = self.inner.take().unwrap();
+    //     self.inner.set(Some(iter.clone()));
 
-        iter.filter(|it| !it.is_trivia()).map(|it| it.kind)
-    }
+    //     iter.filter(|it| !it.is_trivia()).map(|it| it.kind)
+    // }
 
-    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
-        let iter = self.inner.take().unwrap();
-        self.inner.set(Some(iter.clone()));
+    // fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
+    //     let iter = self.inner.take().unwrap();
+    //     self.inner.set(Some(iter.clone()));
 
-        iter
-    }
+    //     iter
+    // }
 }
 
 impl Lexer for NormalLexer {
@@ -388,13 +432,13 @@ impl Lexer for NormalLexer {
             .map_or(SqliteTokenKind::EOF, |it| *it)
     }
 
-    fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
-        self.tokens[self.pos..].iter().copied()
-    }
+    // fn non_triv_token_kinds(&self) -> impl Iterator<Item = SqliteTokenKind> {
+    //     self.tokens[self.pos..].iter().copied()
+    // }
 
-    fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
-        self.all_tokens[self.all_tokens_pos..].iter().cloned()
-    }
+    // fn all_tokens_iter(&self) -> impl Iterator<Item = SqliteToken> {
+    //     self.all_tokens[self.all_tokens_pos..].iter().cloned()
+    // }
 }
 
 impl<T: Lexer> SqliteParser<T> {
@@ -410,20 +454,50 @@ impl<T: Lexer> SqliteParser<T> {
         use SqliteTokenKind::*;
         // TODO: Use a parser context to configure IDEN_SET at runtime
 
-        let iden_set = IDEN_SET;
+        let mut iden_set = IDEN_SET;
+
+        let omit_compound_select = false;
+
+        if !omit_compound_select {
+            iden_set = iden_set.difference(KW_EXCEPT | KW_INTERSECT | KW_UNION);
+        }
+
+        let omit_window_func = false;
+
+        if omit_window_func {
+            iden_set = iden_set.difference(
+                KW_CURRENT
+                    | KW_FOLLOWING
+                    | KW_PARTITION
+                    | KW_PRECEDING
+                    | KW_RANGE
+                    | KW_UNBOUNDED
+                    | KW_EXCLUDE
+                    | KW_GROUPS
+                    | KW_OTHERS
+                    | KW_TIES,
+            );
+        }
+
+        let omit_generated_columns = false;
+
+        if omit_generated_columns {
+            iden_set = iden_set.difference(KW_GENERATED | KW_ALWAYS);
+        }
+
         let iden = iden_set | KW_INDEXED;
         let iden_or_str = iden_set | STR_LIT;
 
         // NOTE: in parse.y, JOIN_KW refers to multiple words and not just `JOIN`
         let iden_or_join = iden_set | KW_INDEXED | JOIN_KEYWORDS;
 
-        // In SQLite, all token that are considered names (Like column name or table names)
+        // TODO: In SQLite, all token that are considered names (Like column name or table names)
         // also accept STR_LIT but we won't do that(Recommended by SQLite too).
-        let name_token = iden_or_join;
+        let name_token = iden_or_join | STR_LIT;
 
         let expr_start = EXPR_LIT_START
             | EXPR_PREFIX_START
-            | EXPR_BIND_PARAM_START
+            | PARAM
             | name_token
             | L_PAREN
             | KW_CAST
@@ -433,6 +507,10 @@ impl<T: Lexer> SqliteParser<T> {
             | KW_RAISE;
 
         let with_alias_start = iden_or_str | KW_AS;
+
+        let table_or_subquery_start = name_token | T!['('];
+
+        let arg_expr_start = KW_DISTINCT | KW_ALL | KW_ORDER | expr_start;
 
         Self {
             lexer,
@@ -444,6 +522,8 @@ impl<T: Lexer> SqliteParser<T> {
             iden_or_str,
             iden_or_join,
             expr_start,
+            arg_expr_start,
+            table_or_subquery_start,
             with_alias_start,
         }
     }
@@ -518,8 +598,18 @@ impl<T: Lexer> SqliteParser<T> {
     }
 
     pub(crate) fn close(&mut self, m: MarkOpened, kind: SqliteTreeKind) -> MarkClosed {
+        self.close_with_tag(m, kind, SqliteTreeTag::NoTag)
+    }
+
+    pub(crate) fn close_with_tag(
+        &mut self,
+        m: MarkOpened,
+        kind: SqliteTreeKind,
+        tag: SqliteTreeTag,
+    ) -> MarkClosed {
         self.events[m.index] = Event::Open {
             kind,
+            tag,
             close_idx: self.events.len() - m.index,
         };
         self.events.push(Event::Close);
@@ -622,9 +712,9 @@ impl<T: Lexer> SqliteParser<T> {
         self.lexer.nth(lookahead)
     }
 
-    pub(crate) fn peek_non_triv_token(&self) -> Option<SqliteToken> {
-        self.lexer.all_tokens_iter().find(|it| !it.is_trivia())
-    }
+    // pub(crate) fn peek_non_triv_token(&self) -> Option<SqliteToken> {
+    //     self.lexer.all_tokens_iter().find(|it| !it.is_trivia())
+    // }
 
     pub(crate) fn at(&self, kind: SqliteTokenKind) -> bool {
         self.nth(0) == kind
@@ -692,14 +782,43 @@ impl<T: Lexer> SqliteParser<T> {
                 // range = (range.0, new_end);
             }
 
-            let error = if self.at(kind) {
-                ParseErrorKind::UnknownTokens
-            } else {
-                kind.into()
-            };
+            // let error = if self.at(kind) {
+            //     ParseErrorKind::UnknownTokens
+            // } else {
+            //     kind.into()
+            // };
 
-            self.close_err(m, error);
-            self.eat(kind);
+            self.close_err(m, kind.into());
+            // self.eat(kind);
+        }
+    }
+
+    pub(crate) fn must_eat2(&mut self, kind: SqliteTokenKind, lr: &mut EnumSet<SqliteTokenKind>) {
+        if !self.eat(kind) {
+            let m = self.open();
+
+            // let mut range = self
+            //     .lexer
+            //     .prev_non_triv_token()
+            //     .map(|tk| (tk.end(), tk.end()))
+            //     .unwrap_or((0, 0));
+
+            while !self.lexer.eof() && !lr.contains(self.nth(0)) {
+                self.advance();
+                // let (_, new_end) = self.lexer.prev_non_triv_token().unwrap().full_range();
+                // range = (range.0, new_end);
+            }
+
+            // let error = if self.at(kind) {
+            //     ParseErrorKind::UnknownTokens
+            // } else {
+            //     kind.into()
+            // };
+
+            self.close_err(m, kind.into());
+            // self.eat(kind);
+        } else {
+            lr.remove(kind);
         }
     }
 
@@ -724,19 +843,20 @@ impl<T: Lexer> SqliteParser<T> {
                 // range = (range.0, new_end);
             }
 
-            if self.at_any(kinds) {
-                // self.errors.push(SqliteParseError {
-                //     range,
-                //     message: ParseErrorKind::UnknownTokens,
-                // });
-                let err_close_m = self.close_err(m, ParseErrorKind::UnknownTokens);
+            // if self.at_any(kinds) {
+            //     // self.errors.push(SqliteParseError {
+            //     //     range,
+            //     //     message: ParseErrorKind::UnknownTokens,
+            //     // });
+            //     let err_close_m = self.close_err(m, ParseErrorKind::UnknownTokens);
 
-                let m = self.open_before(err_close_m);
-                self.guaranteed_any(kinds);
-                self.close(m, expected);
-            } else {
-                self.close_err(m, expected.into());
-            }
+            //     let m = self.open_before(err_close_m);
+            //     self.guaranteed_any(kinds);
+            //     self.close(m, expected);
+            // } else {
+            //     self.close_err(m, expected.into());
+            // }
+            self.close_err(m, expected.into());
         } else {
             let m = self.open();
             self.guaranteed_any(kinds);
@@ -744,21 +864,21 @@ impl<T: Lexer> SqliteParser<T> {
         }
     }
 
-    pub(crate) fn at_any_now_or_later(
-        &self,
-        kinds: EnumSet<SqliteTokenKind>,
-        r: EnumSet<SqliteTokenKind>,
-    ) -> bool {
-        if self.at_any(kinds) {
-            return true;
-        } else {
-            self.lexer
-                .non_triv_token_kinds()
-                .skip_while(|&it| !r.contains(it))
-                .next()
-                .is_some_and(|it| kinds.contains(it))
-        }
-    }
+    // pub(crate) fn at_any_now_or_later(
+    //     &self,
+    //     kinds: EnumSet<SqliteTokenKind>,
+    //     r: EnumSet<SqliteTokenKind>,
+    // ) -> bool {
+    //     if self.at_any(kinds) {
+    //         return true;
+    //     } else {
+    //         self.lexer
+    //             .non_triv_token_kinds()
+    //             .skip_while(|&it| !r.contains(it))
+    //             .next()
+    //             .is_some_and(|it| kinds.contains(it))
+    //     }
+    // }
 
     pub(crate) fn eof(&self) -> bool {
         self.lexer.eof()
@@ -772,5 +892,37 @@ impl<T: Lexer> SqliteParser<T> {
         let all_tokens = self.lexer.all_tokens().into_iter();
 
         CST::build(self.abs_pos, all_tokens, self.events)
+    }
+
+    // pub(crate) fn tag_last_closeda(&mut self, tag_to_assign: SqliteTreeTag) {
+    //     let Some(Event::Close) = self.events.last().cloned() else {
+    //         panic!("DEV ERROR: Only call tag_latest right after closing a tree")
+    //     };
+
+    //     if let Event::Open {
+    //         kind, close_idx, ..
+    //     } = self.events[start_idx]
+    //     {
+    //         self.events[start_idx] = Event::Open {
+    //             kind,
+    //             tag: tag_to_assign,
+    //             close_idx,
+    //         };
+    //     }
+    // }
+
+    pub(crate) fn tag_last_closed2(&mut self, m: MarkClosed, tag_to_assign: SqliteTreeTag) {
+        let Event::Open {
+            kind, close_idx, ..
+        } = self.events[m.index]
+        else {
+            panic!("DEV ERROR: Mark Closed not pointing to an open event")
+        };
+
+        self.events[m.index] = Event::Open {
+            kind,
+            tag: tag_to_assign,
+            close_idx,
+        };
     }
 }

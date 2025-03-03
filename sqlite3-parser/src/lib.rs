@@ -2,10 +2,8 @@
 //! resillient parsing [guide]((https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html))
 //! by matklad
 
-// mod cst;
-// mod cst2;
+mod ast;
 mod cst;
-mod cursor;
 mod grammar;
 mod lexer;
 mod parser;
@@ -179,22 +177,32 @@ pub fn incremental_parse2<Cst: CstTrait>(
     p.build_cst()
 }
 
-pub fn parse_any(
+pub fn parse_any<CST: CstTrait>(
     text: &str,
     r: EnumSet<SqliteTokenKind>,
     parse_function: fn(&mut SqliteParser<NormalLexer>, EnumSet<SqliteTokenKind>),
-) -> incr::IncrSqlCst {
+) -> CST {
     let lexer = SqliteLexer::new(text, SqliteVersion([3, 46, 0]));
 
     let mut p = SqliteParser::new(NormalLexer::from(lexer));
+    let root_m = p.open();
     parse_function(&mut p, r);
+
+    if !p.eof() {
+        p.proceed_with_err(r, ParseErrorKind::UnknownTokens);
+    }
+    p.close(root_m, SqliteTreeKind::File);
 
     p.build_cst()
 }
 
-#[test]
-fn simple_parser_test() {
-    let input = "WITH derived AS (
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_parser_test() {
+        let input = "WITH derived AS (
             SELECT MAX(a) AS max_a,
                    COUNT(b) AS b_num,
                    user_id
@@ -204,30 +212,77 @@ fn simple_parser_test() {
         SELECT * FROM `table`
         LEFT JOIN derived USING (user_id);";
 
-    let cst: batch::SqlCst = parse(input);
+        let cst: batch::SqlCst = parse(input);
 
-    println!("{cst}");
+        println!("{cst}");
 
-    let clause = cst
-        .root()
-        .me_and_descendants()
-        .find(|it| it.tree() == Some(SqliteTreeKind::CteClause))
-        .unwrap();
+        let clause = cst
+            .root()
+            .me_and_descendants()
+            .find(|it| it.tree() == Some(SqliteTreeKind::CteClause))
+            .unwrap();
 
-    println!("{}`", clause.to_text());
-    assert!(cst.errors().next().is_none());
-}
+        println!("{}`", clause.to_text());
+        assert!(cst.errors().next().is_none());
+    }
 
-#[test]
-fn simple_parser_test2() {
-    let cst: incr::IncrSqlCst = parse("\n\n\n");
+    #[test]
+    fn simple_parser_test2() {
+        let cst: incr::IncrSqlCst = parse("\n\n\n");
 
-    assert_eq!("\n\n\n", cst.root().to_text());
-}
+        assert_eq!("\n\n\n", cst.root().to_text());
+    }
 
-#[test]
-fn simple_parser_test3() {
-    let cst: incr::IncrSqlCst = parse("CREATE TABLE f     ");
+    #[test]
+    fn simple_parser_test3() {
+        let cst: incr::IncrSqlCst = parse(
+            "SELECT sum(over) over over over FROM over over WINDOW over AS (ORDER BY over)
 
-    println!("{:#?}", cst.root().comparable());
+;",
+        );
+
+        println!("{}", cst);
+    }
+
+    #[test]
+    fn check_joins() {
+        use crate::grammar::join_operator;
+        let r = Default::default();
+
+        let input = "JOIN JOIN JOIN JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "CROSS CROSS CROSS JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "INNER CROSS CROSS JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "INNER CROSS LEFT JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "OUTER CROSS CROSS JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "OUTER NATURAL NATURAL JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "OUTER NATURAL LEFT JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = "OUTER CROSS NATURAL JOIN";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+
+        let input = ",";
+        let cst: incr::IncrSqlCst = parse_any(input, r, join_operator);
+        insta::assert_snapshot!(cst);
+    }
 }

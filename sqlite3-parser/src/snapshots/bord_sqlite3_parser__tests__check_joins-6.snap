@@ -1,0 +1,15 @@
+---
+source: sqlite3-parser/src/lib.rs
+expression: cst
+snapshot_kind: text
+---
+File(0..26)
+└───JoinOperator(0..26)
+    ├───Error: IllegalJoinOperator(0..21)
+    ├   ├───KW_OUTER(0..5)
+    ├   ├───WHITESPACE(5..6)
+    ├   ├───KW_NATURAL(6..13)
+    ├   ├───WHITESPACE(13..14)
+    ├   └───KW_NATURAL(14..21)
+    ├───WHITESPACE(21..22)
+    └───KW_JOIN(22..26)

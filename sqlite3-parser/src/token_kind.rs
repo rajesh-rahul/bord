@@ -177,7 +177,7 @@ pub enum SqliteTokenKind {
     /// `;`
     SEMICOLON,
     /// ":"
-    COLON,
+    // COLON,
     /// `=`
     EQ_SQL,
     /// `==`
@@ -221,21 +221,20 @@ pub enum SqliteTokenKind {
     PIPE,
     /// `&`
     AMPERSAND,
-    /// `@`
-    AT_MARK,
+    // /// `@`
+    // AT_MARK,
     ///  `?`
-    Q_MARK,
+    // Q_MARK,
     INT_LIT,
     HEX_LIT,
     BLOB_LIT,
     ERROR,
 
     // Not actually keywords but we treat them as such to make things easy in the parser
-    KW_TRUE,
-    KW_FALSE,
     KW_STORED,
     KW_ROWID,
     KW_STRICT,
+    PARAM,
 }
 
 impl SqliteTokenKind {
@@ -248,9 +247,7 @@ impl SqliteTokenKind {
 
         match self {
             DOT | STAR | COMMA | SEMICOLON | PLUS | MINUS | PERCENT | L_PAREN | R_PAREN
-            | EQ_SQL | F_SLASH | L_CHEV | R_CHEV | TILDA | PIPE | AMPERSAND | COLON | Q_MARK => {
-                Some(1)
-            }
+            | EQ_SQL | F_SLASH | L_CHEV | R_CHEV | TILDA | PIPE | AMPERSAND => Some(1),
 
             EQ | NOT_EQ | DOUBLE_PIPE | EXTRACT_ONE | L_CHEV_EQ | R_CHEV_EQ | L_CHEV_TWO
             | R_CHEV_TWO | NOT_EQ_SQL => Some(2),
@@ -515,8 +512,6 @@ impl SqliteTokenKind {
             KW_WINDOW => "WINDOW",
             KW_WITH => "WITH",
             KW_WITHOUT => "WITHOUT",
-            KW_TRUE => "TRUE",
-            KW_FALSE => "FALSE",
             WHITESPACE => "WHITESPACE",
             S_LINE_COMMENT => "S_LINE_COMMENT",
             M_LINE_COMMENT => "M_LINE_COMMENT",
@@ -530,7 +525,6 @@ impl SqliteTokenKind {
             R_PAREN => ")",
             COMMA => ",",
             SEMICOLON => ";",
-            COLON => ":",
             EQ_SQL => "=",
             EQ => "==",
             NOT_EQ_SQL => "<>",
@@ -552,14 +546,13 @@ impl SqliteTokenKind {
             R_CHEV_TWO => ">>",
             PIPE => "|",
             AMPERSAND => "&",
-            Q_MARK => "?",
-            AT_MARK => "@",
             INT_LIT => "INT_LIT",
             HEX_LIT => "HEX_LIT",
             ERROR => "ERROR",
             KW_STORED => "STORED",
             KW_ROWID => "ROWID",
             KW_STRICT => "STRICT",
+            PARAM => "PARAM",
         }
     }
 }
@@ -719,8 +712,6 @@ pub fn sqlite_keywords(keyword: &[u8]) -> Option<SqliteTokenKind> {
         b"WITHOUT" => SqliteTokenKind::KW_WITHOUT,
 
         // These doesn't seem to be keywords but we will treat them as such
-        b"TRUE" => SqliteTokenKind::KW_TRUE,
-        b"FALSE" => SqliteTokenKind::KW_FALSE,
         b"STORED" => SqliteTokenKind::KW_STORED,
         b"STRICT" => SqliteTokenKind::KW_STRICT,
         b"ROWID" => SqliteTokenKind::KW_ROWID,

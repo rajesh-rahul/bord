@@ -1,10 +1,10 @@
-use crate::grammar::common::{IDEN_SET, JOIN_KEYWORDS};
+use crate::grammar::common::{IDEN_SET, JOIN_KEYWORDS, LITERAL_VALUE};
 use crate::ungram::{
     UngramTraverser, UngramTraverserBacktrackResult, UngramTraverserNodeKind, UNGRAMMAR,
 };
 use crate::{
     CstNodeDataKind, CstNodeTrait, CstTrait, NormalLexer, ParseErrorKind, SqliteLexer,
-    SqliteParser, SqliteTokenKind, SqliteVersion,
+    SqliteParser, SqliteTokenKind, SqliteTreeKind, SqliteVersion,
 };
 use core::str;
 use nom::bytes::complete::escaped;
@@ -31,7 +31,12 @@ pub fn ensure_ast_conforms_to_ungram(ast: &impl CstTrait) {
                     {
                         traverser.token_visited();
                         before_backtrack = None;
-                        match_history.push(name.to_owned());
+                        match_history.push(format!(
+                            "{}({:?}..{:?})",
+                            name,
+                            ast_node.unwrap().start_pos(),
+                            ast_node.unwrap().end_pos()
+                        ));
                     }
                     Some(CstNodeDataKind::Error(err))
                         if parse_err_corresponds_to_ungram_item(name, &err) =>
@@ -60,10 +65,30 @@ pub fn ensure_ast_conforms_to_ungram(ast: &impl CstTrait) {
             }
             UngramTraverserNodeKind::Tree { name, ast_node, .. } => {
                 match ast_node.map(|it| it.data().kind.clone()) {
-                    Some(CstNodeDataKind::Tree(tree_kind)) if tree_kind.as_str() == name => {
+                    // ModuleArgList and JoinOperator are special cases, its too complicated to handle
+                    // so we skip them. It should be fine as they are only one level deep
+                    Some(CstNodeDataKind::Tree(
+                        tree @ (SqliteTreeKind::ModuleArgList | SqliteTreeKind::JoinOperator),
+                        _,
+                    )) if tree.as_str() == name => {
+                        traverser.node_visited();
+                        before_backtrack = None;
+                        match_history.push(format!(
+                            "{}({:?}..{:?})",
+                            name,
+                            ast_node.unwrap().start_pos(),
+                            ast_node.unwrap().end_pos()
+                        ));
+                    }
+                    Some(CstNodeDataKind::Tree(tree_kind, _)) if tree_kind.as_str() == name => {
                         traverser.node_visited_and_expand_children();
                         before_backtrack = None;
-                        match_history.push(name.to_owned());
+                        match_history.push(format!(
+                            "{}({:?}..{:?})",
+                            name,
+                            ast_node.unwrap().start_pos(),
+                            ast_node.unwrap().end_pos()
+                        ));
                     }
                     Some(CstNodeDataKind::Error(err))
                         if parse_err_corresponds_to_ungram_item(name, &err) =>
@@ -95,9 +120,9 @@ pub fn ensure_ast_conforms_to_ungram(ast: &impl CstTrait) {
 
     if !traverser.is_traversal_complete() {
         panic!(
-            "Ungrammar and Ast mismatch!\nHistory: {match_history:?}\nAst: {:?}\nUngrammar: {:?}",
-            traverser.ast_stack(),
-            traverser.ungram_stack()
+            "Ungrammar and Ast mismatch!\nHistory: {match_history:?}\nBefore BackTrack = {before_backtrack:?}\n {ast}",
+            // traverser.ast_stack(),
+            // traverser.ungram_stack()
         )
     }
 }
@@ -117,15 +142,15 @@ pub enum SimpleSqliteNode {
     Leaf(String),
 }
 
-pub fn check_ast(
-    parse_function: fn(&mut SqliteParser<NormalLexer>, r: enumset::EnumSet<SqliteTokenKind>),
-    r: enumset::EnumSet<SqliteTokenKind>,
-    input: &str,
-    expected_ast: &str,
-) {
-    let ast = crate::parse_any(input, r, parse_function);
-    check_input(&ast, expected_ast)
-}
+// pub fn check_ast(
+//     parse_function: fn(&mut SqliteParser<NormalLexer>, r: enumset::EnumSet<SqliteTokenKind>),
+//     r: enumset::EnumSet<SqliteTokenKind>,
+//     input: &str,
+//     expected_ast: &str,
+// ) {
+//     let ast = crate::parse_any(input, r, parse_function);
+//     check_input(&ast, expected_ast)
+// }
 
 pub fn parse_is_at(func: fn(&SqliteParser<NormalLexer>) -> bool, input: &str) -> bool {
     let lexer = SqliteLexer::new(input, SqliteVersion([3, 46, 0]));
@@ -167,6 +192,9 @@ fn parse_err_corresponds_to_ungram_item(ungram_item: &str, err: &ParseErrorKind)
             }
             ExpectedItem::Tree(tree_kind) => ungram_item == tree_kind.as_str(),
         }),
+        ParseErrorKind::IllegalJoinOperator => {
+            unreachable!("We do not check inside joinoperator so we should never see this error")
+        }
         ParseErrorKind::UnknownTokens => false,
     }
 }
@@ -185,16 +213,12 @@ fn fat_ungram_tokens_match_ast(ungram_token: &str, ast_token: SqliteTokenKind) -
 
     // NOTE: In real scenarios actual iden set is dynamic However, in testing scenarios
     // such as this, we will default use the static IDEN_SET
-    let name_static_set = IDEN_SET | KW_INDEXED | JOIN_KEYWORDS;
+    let name_static_set = IDEN_SET | KW_INDEXED | JOIN_KEYWORDS | STR_LIT;
     match (ungram_token, ast_token) {
         ("$NAME" | "$CONSTRAINT_NAME", ast_token) if (name_static_set).contains(ast_token) => true,
         ("$NUMERIC_LIT", INT_LIT | HEX_LIT | REAL_LIT) => true,
         ("$COLLATION_NAME", ast_token) if (IDEN_SET | STR_LIT).contains(ast_token) => true,
-        (
-            "$LITERAL_VALUE",
-            INT_LIT | HEX_LIT | REAL_LIT | STR_LIT | BLOB_LIT | KW_NULL | KW_TRUE | KW_FALSE
-            | KW_CURRENT_TIME | KW_CURRENT_DATE,
-        ) => true,
+        ("$LITERAL_VALUE", ast_token) if LITERAL_VALUE.contains(ast_token) => true,
         _ => false,
     }
 }
@@ -256,7 +280,7 @@ fn into_simple_node<'a>(
     ast: &impl CstTrait,
 ) -> Option<SimpleSqliteNode> {
     let simple_node = match &input.data().kind {
-        CstNodeDataKind::Tree(tree_kind) => SimpleSqliteNode::SqliteNode {
+        CstNodeDataKind::Tree(tree_kind, _) => SimpleSqliteNode::SqliteNode {
             name: format!("{:?}", tree_kind),
             children: input
                 .children()

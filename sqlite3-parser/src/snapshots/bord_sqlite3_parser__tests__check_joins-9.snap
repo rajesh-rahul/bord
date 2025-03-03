@@ -1,0 +1,8 @@
+---
+source: sqlite3-parser/src/lib.rs
+expression: cst
+snapshot_kind: text
+---
+File(0..1)
+└───JoinOperator(0..1)
+    └───COMMA(0..1)

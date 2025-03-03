@@ -1,0 +1,15 @@
+---
+source: sqlite3-parser/src/lib.rs
+expression: cst
+snapshot_kind: text
+---
+File(0..19)
+├───JoinOperator(0..4)
+├   └───KW_JOIN(0..4)
+└───Error: UnknownTokens(4..19)
+    ├───WHITESPACE(4..5)
+    ├───KW_JOIN(5..9)
+    ├───WHITESPACE(9..10)
+    ├───KW_JOIN(10..14)
+    ├───WHITESPACE(14..15)
+    └───KW_JOIN(15..19)

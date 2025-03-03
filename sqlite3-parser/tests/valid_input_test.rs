@@ -14,6 +14,7 @@ fn test_from_corpus() {
         .filter(|e| e.metadata().is_ok_and(|m| m.is_file()));
 
     for entry in file_paths {
+        eprintln!("Parsing {:?}", entry.path().canonicalize().unwrap());
         let input_string = fs::read_to_string(entry.path()).unwrap();
 
         input_string.split("%%").for_each(|test_data| {

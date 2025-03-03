@@ -1,10 +1,10 @@
 pub(crate) mod common;
 
 use crate::parser::{Event, ExpectedItem, Lexer, MarkClosed, SqliteParser};
-use crate::SqliteTokenKind::*;
-use crate::SqliteTreeKind::*;
 use crate::T;
+use crate::{ParseErrorKind, SqliteTreeKind::*};
 use crate::{SqliteTokenKind, SqliteTreeKind};
+use crate::{SqliteTokenKind::*, SqliteTreeTag};
 use common::*;
 use enumset::{enum_set, EnumSet};
 
@@ -39,7 +39,7 @@ macro_rules! must_eat_one_of {
 
 macro_rules! bail_if_not_at {
     ($parser:expr, $r:expr, $token_set:expr, $expected:expr) => {
-        if !$parser.at_any_now_or_later(($token_set | enum_set!()), $r) {
+        if !$parser.at_any(($token_set | enum_set!())) {
             $parser.expected_one_of(expected_items!($expected), $r);
             return;
         }
@@ -309,26 +309,25 @@ pub fn pragma_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         expected_one_of!(p, r, PragmaName);
     }
 
-    if p.eat(T![=]) {
-        if p.at_any(T![+] | T![-] | NUMERIC_LIT | p.name_token) {
+    let had_parentheses = p.at(T!['(']);
+    if p.eat_any(T![=] | T!['(']) {
+        if p.at_any(T![+] | T![-] | NUMERIC_LIT | p.name_token | KW_ON | KW_DELETE | KW_DEFAULT) {
             pragma_value(p, r);
         } else {
             expected_one_of!(p, r, PragmaValue);
         }
-    } else if p.at(T!['(']) {
-        if p.at_any(T![+] | T![-] | NUMERIC_LIT | p.name_token) {
-            pragma_value(p, r);
-        } else {
-            expected_one_of!(p, r, PragmaValue);
+
+        if had_parentheses {
+            p.must_eat(T![')'], r);
         }
-        p.must_eat(T![')'], r);
     }
 
     p.close(m, PragmaStmt);
 }
 
 pub fn pragma_value<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    let pragma_value_start = T![+] | T![-] | NUMERIC_LIT | p.name_token | STR_LIT;
+    let pragma_value_start =
+        T![+] | T![-] | NUMERIC_LIT | p.name_token | KW_ON | KW_DELETE | KW_DEFAULT;
     bail_if_not_at!(p, r, pragma_value_start, PragmaValue);
 
     let m = p.open();
@@ -337,10 +336,10 @@ pub fn pragma_value<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         signed_number(p, r);
     } else if p.at_any(p.name_token) {
         must_eat_name(p, r, PragmaValueName);
-    } else if p.at(STR_LIT) {
-        p.must_eat(STR_LIT, r);
+    } else if p.at_any(KW_ON | KW_DELETE | KW_DEFAULT) {
+        p.advance();
     } else {
-        expected_one_of!(p, r, [SignedNumber, PragmaValueName, STR_LIT]);
+        expected_one_of!(p, r, [SignedNumber, PragmaValueName]);
     }
 
     p.close(m, PragmaValue);
@@ -442,34 +441,51 @@ pub fn detach_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.guaranteed(KW_DETACH);
     p.eat(KW_DATABASE);
 
-    expr(p, r);
+    p.wrap(DbNameExpr, |p| {
+        expr(p, r);
+    });
 
     p.close(m, DetachStmt);
 }
 
-/// TODO: Support ModuleArg properly, it is much more expressive than just these
+/// Module argument list is interpreted as a string by SQLite. In our case, we try to match
+/// anything between a a balanced pair of parentheses.
 pub fn module_arg_list<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    let m = p.open();
+    assert!(p.at(T!['(']));
 
-    p.guaranteed(T!['(']);
+    let mut lookahead = 0;
+    let mut open_brackets = 0;
 
-    if p.at_any(MODULE_ARG_START) {
-        p.wrap(ModuleArg, |p| p.advance());
-    } else {
-        expected_one_of!(p, r, ModuleArg);
-    }
-    while p.at(T![,]) {
-        p.guaranteed(T![,]);
+    loop {
+        match p.nth(lookahead) {
+            T!['('] => open_brackets += 1,
+            T![')'] => open_brackets -= 1,
+            EOF => break,
+            _ => {}
+        }
 
-        if p.at_any(MODULE_ARG_START) {
-            p.wrap(ModuleArg, |p| p.advance());
+        if open_brackets == 0 {
+            break;
         } else {
-            expected_one_of!(p, r, ModuleArg);
+            lookahead += 1;
         }
     }
-    p.must_eat(T![')'], r);
 
-    p.close(m, ModuleArgList);
+    // HAPPY CASE:
+    if open_brackets == 0 {
+        p.wrap(ModuleArgList, |p| p.advance_by(lookahead + 1));
+    }
+    // ERROR CASE: We do not have a balanced pair of parantheses.
+    // IMPORTANT SIDE NOTE: Here, we had to make a compromise between having good error recovery
+    // and supporting an incremental parser. We use semicolons to determine where to start
+    // incremental parser and we want to avoid a situation where adding a token after a
+    // semicolon-terminated statement will cause us to reparse the terminated statement. If
+    // we try to salvage tokens from the error tree here, we will have exactly that situation.
+    // Given this, and given that module arg lists are not common, we will support incremental parsing.
+    else {
+        // `lookahead + 1` is the EOF token which we cannot eat so we just have `lookahead`
+        p.wrap_err(ModuleArgList, r, |p| p.advance_by(lookahead));
+    }
 }
 
 pub fn create_virtual_table_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -672,7 +688,7 @@ pub fn insert_select_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     select_stmt_with_cte(p, r);
 
-    if p.at(KW_ON) {
+    while p.at(KW_ON) {
         upsert_clause(p, r);
     }
 
@@ -742,7 +758,7 @@ pub fn insert_values_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         expr_list(p, r);
     }
 
-    if p.at(KW_ON) {
+    while p.at(KW_ON) {
         upsert_clause(p, r);
     }
 
@@ -864,7 +880,7 @@ pub fn update_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         returning_clause(p, r);
     }
 
-    if p.at(KW_LIMIT) {
+    if p.at_any(UPDATE_STMT_LIMITED_START) {
         update_stmt_limited(p, r);
     }
 
@@ -878,12 +894,12 @@ pub fn trigger_body_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     if p.at(KW_UPDATE) {
         update_stmt(p, r);
-    } else if p.at(KW_INSERT) {
+    } else if p.at_any(INSERT_STMT_START) {
         insert_stmt(p, r);
     } else if p.at(KW_DELETE) {
         delete_stmt(p, r);
-    } else if p.at_any(SELECT_STMT_START) {
-        select_stmt(p, r);
+    } else if p.at_any(SELECT_STMT_WITH_CTE_START) {
+        select_stmt_with_cte(p, r);
     } else {
         unreachable!("DEV ERROR: TRIGGER_BODY_STMT_START is wrong");
     }
@@ -1006,13 +1022,11 @@ pub fn create_trigger_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         p.eat_any(KW_BEFORE | KW_AFTER);
     } else if p.at(KW_INSTEAD) {
         trigger_instead_of(p, r);
-    } else {
-        expected_one_of!(p, r, [KW_BEFORE, KW_AFTER, TriggerInsteadOf]);
     }
 
     trigger_action_kind(p, r);
     p.must_eat(KW_ON, r);
-    must_eat_name(p, r, TableName);
+    full_table_name(p, r);
 
     if p.at(KW_FOR) {
         trigger_for_each_row(p, r);
@@ -1081,7 +1095,7 @@ pub fn begin_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     let m = p.open();
 
     p.guaranteed(KW_BEGIN);
-    must_eat_one_of!(p, r, [KW_DEFERRED, KW_IMMEDIATE, KW_EXCLUSIVE]);
+    p.eat_any(KW_DEFERRED | KW_IMMEDIATE | KW_EXCLUSIVE);
     p.eat(KW_TRANSACTION);
 
     p.close(m, BeginStmt);
@@ -1197,7 +1211,7 @@ pub fn alter_table_stmt<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     if p.at(KW_RENAME) {
         if p.nth(1) == KW_TO {
             rename_table(p, r);
-        } else if p.nth(1) == KW_COLUMN {
+        } else if p.at_any(KW_COLUMN | p.name_token) {
             rename_column(p, r);
         } else {
             let items = expected_items!(RenameTable, RenameColumn);
@@ -1276,7 +1290,8 @@ pub fn fk_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         fk_action(p, r);
     }
 
-    if p.at(KW_DEFERRABLE) {
+    // KW_NULL check is need to ensure disambiguity
+    if p.at_any(FK_DEFERRABLE_START) && p.nth(1) != KW_NULL {
         fk_deferrable(p, r);
     }
 
@@ -1397,19 +1412,8 @@ pub fn table_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         check_constraint(p, r);
     } else if p.at(KW_FOREIGN) {
         table_fk_constraint(p, r);
-    } else {
-        expected_one_of!(
-            p,
-            r,
-            [
-                TablePkConstraint,
-                TableUqConstraint,
-                CheckConstraint,
-                TableFkConstraint
-            ]
-        );
     }
-
+    // NOTE: Yes, having a Constraint name without any constraint following it is legal
     p.close(m, TableConstraint);
 }
 
@@ -1442,7 +1446,14 @@ pub fn table_pk_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     p.guaranteed(KW_PRIMARY);
     p.must_eat(KW_KEY, r);
-    indexed_col_list(p, r);
+
+    p.must_eat(T!['('], r);
+    indexed_col(p, r);
+    while p.eat(T![,]) {
+        indexed_col(p, r);
+    }
+    p.eat(KW_AUTOINCREMENT);
+    p.must_eat(T![')'], r);
 
     if p.at(KW_ON) {
         conflict_clause(p, r);
@@ -1471,9 +1482,7 @@ pub fn indexed_col<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     let m = p.open();
 
-    if p.at_any(p.name_token) {
-        must_eat_name(p, r, ColumnName);
-    } else if p.at_any(p.expr_start) {
+    if p.at_any(p.expr_start) {
         expr(p, r);
     } else {
         unreachable!("DEV ERROR: indexed_col start check is wrong");
@@ -1525,14 +1534,20 @@ pub fn default_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     p.guaranteed(KW_DEFAULT);
 
-    // NOTE: SQLite seems to also accept `iden` (see SqliteParser for what this means)
-    // but its not clear we should do it so we don't
     if p.at(T!['(']) {
         default_constraint_expr(p, r);
-    } else if p.at_any(LITERAL_VALUE) {
-        p.wrap(DefaultConstraintLiteral, |p| p.advance());
-    } else if p.at_any(SIGNED_NUMBER_START) {
-        signed_number(p, r);
+    } else if p.at_any(LITERAL_VALUE | T![+] | T![-]) {
+        p.wrap(DefaultConstraintLiteral, |p| {
+            p.eat_any(T![+] | T![-]);
+
+            // TODO: Be able to report "Expected a literal value" error
+            // (instead of saying a specific kind like STR_LIT)
+            if !p.eat_any(LITERAL_VALUE) {
+                expected_one_of!(p, r, [STR_LIT]);
+            }
+        });
+    } else if p.at(IDEN) {
+        p.wrap(DefaultConstraintIden, |p| p.advance());
     } else {
         expected_one_of!(
             p,
@@ -1540,7 +1555,7 @@ pub fn default_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
             [
                 DefaultConstraintExpr,
                 DefaultConstraintLiteral,
-                SignedNumber
+                DefaultConstraintIden,
             ]
         );
     }
@@ -1639,9 +1654,16 @@ pub fn case_when_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     let m = p.open();
 
     p.guaranteed(KW_WHEN);
-    expr(p, r);
+
+    if let Some(closed_m) = expr(p, r | KW_THEN) {
+        p.tag_last_closed2(closed_m, SqliteTreeTag::When);
+    }
+
     p.must_eat(KW_THEN, r);
-    expr(p, r);
+
+    if let Some(closed_m) = expr(p, r) {
+        p.tag_last_closed2(closed_m, SqliteTreeTag::Then);
+    }
 
     p.close(m, CaseWhenClause);
 }
@@ -1651,9 +1673,9 @@ pub fn case_when_clause_list<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     let m = p.open();
 
-    case_when_clause(p, r);
+    case_when_clause(p, r | KW_WHEN);
     while p.at(KW_WHEN) {
-        case_when_clause(p, r);
+        case_when_clause(p, r | KW_WHEN);
     }
 
     p.close(m, CaseWhenClauseList);
@@ -1675,13 +1697,13 @@ pub fn expr_case<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.guaranteed(KW_CASE);
 
     if p.at_any(p.expr_start) {
-        case_target_expr(p, r);
+        case_target_expr(p, r | KW_WHEN | KW_ELSE | KW_END);
     }
 
-    case_when_clause_list(p, r);
+    case_when_clause_list(p, r | KW_ELSE | KW_END);
 
     if p.at(KW_ELSE) {
-        case_else_clause(p, r);
+        case_else_clause(p, r | KW_END);
     }
 
     p.must_eat(KW_END, r);
@@ -1703,19 +1725,19 @@ pub fn expr_cast<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, ExprCast);
 }
 
-pub fn expr_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, EXPR_EXISTS_SELECT_START, ExprSelect);
+pub fn expr_exists_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+    bail_if_not_at!(p, r, EXPR_EXISTS_SELECT_START, ExprExistsSelect);
 
     let m = p.open();
 
     p.eat(KW_NOT);
-    p.eat(KW_EXISTS);
+    p.must_eat(KW_EXISTS, r);
 
     p.must_eat(T!['('], r);
     select_stmt_with_cte(p, r);
     p.must_eat(T![')'], r);
 
-    p.close(m, ExprSelect);
+    p.close(m, ExprExistsSelect);
 }
 
 pub fn over_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -1756,15 +1778,18 @@ pub fn arg_star<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 }
 
 pub fn arg_expr<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, KW_DISTINCT | p.expr_start, ArgExpr);
+    bail_if_not_at!(p, r, p.arg_expr_start, ArgExpr);
 
     let m = p.open();
 
-    p.eat(KW_DISTINCT);
+    p.eat_any(KW_DISTINCT | KW_ALL);
 
-    expr(p, r);
-    while p.eat(T![,]) {
+    // TODO: Why does thing being optional not working in 3.43? Is it meant for 4.0?
+    if p.at_any(p.expr_start) {
         expr(p, r);
+        while p.eat(T![,]) {
+            expr(p, r);
+        }
     }
 
     if p.at(KW_ORDER) {
@@ -1777,10 +1802,10 @@ pub fn arg_expr<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 pub fn func_arguments<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     let m = p.open();
 
-    if p.at_any(p.expr_start | KW_DISTINCT) {
-        arg_expr(p, r);
-    } else if p.at(T![*]) {
+    if p.at(T![*]) {
         arg_star(p, r);
+    } else if p.at_any(p.arg_expr_start) {
+        arg_expr(p, r);
     } else {
         unreachable!("DEV ERROR: func_arguments start check is wrong")
     }
@@ -1796,8 +1821,8 @@ pub fn expr_func<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.must_eat_any(p.iden_or_join, FunctionName, r);
     p.must_eat(T!['('], r);
 
-    if p.at_any(p.expr_start | KW_DISTINCT | T![*]) {
-        func_arguments(p, r);
+    if p.at_any(p.arg_expr_start | T![*]) {
+        func_arguments(p, r | T![')'] | KW_FILTER | KW_OVER);
     }
 
     p.must_eat(T![')'], r);
@@ -1814,11 +1839,11 @@ pub fn expr_func<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 }
 
 pub fn expr_bind_param<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, EXPR_BIND_PARAM_START, ExprBindParam);
+    bail_if_not_at!(p, r, PARAM, ExprBindParam);
 
     let m = p.open();
 
-    todo!();
+    p.guaranteed(PARAM);
 
     p.close(m, ExprBindParam);
 }
@@ -1920,6 +1945,9 @@ pub fn values_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     p.guaranteed(KW_VALUES);
     expr_list(p, r);
+    while p.eat(T![,]) {
+        expr_list(p, r | T![,]);
+    }
 
     p.close(m, ValuesSelect);
 }
@@ -2143,10 +2171,6 @@ pub fn ordering_term<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     expr(p, r);
 
-    if p.at(KW_COLLATE) {
-        collation(p, r);
-    }
-
     if p.at_any(ORDER_START) {
         order(p, r);
     }
@@ -2175,7 +2199,7 @@ pub fn window_def<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     p.must_eat(T!['('], r);
 
-    if !p.at(KW_PARTITION) && p.at_any(p.name_token) {
+    if !p.at_any(KW_PARTITION | KW_ORDER | FRAME_SPEC_START) && p.at_any(p.name_token) {
         must_eat_name(p, r, WindowBaseName);
     }
 
@@ -2291,93 +2315,132 @@ pub fn join_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, JoinConstraint);
 }
 
-pub fn natural_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, KW_NATURAL, NaturalJoin);
+// pub fn natural_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, KW_NATURAL, NaturalJoin);
 
-    let m = p.open();
+//     let m = p.open();
 
-    p.must_eat(KW_NATURAL, r);
+//     p.must_eat(KW_NATURAL, r);
 
-    if p.at(KW_INNER) {
-        inner_join(p, r);
-    } else if p.at_any(OUTER_JOIN_START) {
-        outer_join(p, r);
-    } else if p.at(KW_JOIN) {
-        p.wrap(Join, |p| p.guaranteed(KW_JOIN));
-    } else {
-        expected_one_of!(p, r, [InnerJoin, OuterJoin, Join]);
-    }
-    p.close(m, NaturalJoin);
-}
+//     if p.at(KW_INNER) {
+//         inner_join(p, r);
+//     } else if p.at_any(OUTER_JOIN_START) {
+//         outer_join(p, r);
+//     } else if p.at(KW_CROSS) {
+//         cross_join(p, r);
+//     } else if p.at(KW_JOIN) {
+//         p.wrap(Join, |p| p.guaranteed(KW_JOIN));
+//     } else {
+//         expected_one_of!(p, r, [InnerJoin, OuterJoin, Join]);
+//     }
+//     p.close(m, NaturalJoin);
+// }
 
-pub fn inner_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, KW_INNER, InnerJoin);
+// pub fn inner_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, KW_INNER, InnerJoin);
 
-    let m = p.open();
+//     let m = p.open();
 
-    p.must_eat(KW_INNER, r);
-    p.must_eat(KW_JOIN, r);
+//     p.must_eat(KW_INNER, r);
+//     p.must_eat(KW_JOIN, r);
 
-    p.close(m, InnerJoin);
-}
+//     p.close(m, InnerJoin);
+// }
 
-pub fn outer_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, OUTER_JOIN_START, OuterJoin);
+// pub fn outer_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, OUTER_JOIN_START, OuterJoin);
 
-    let m = p.open();
+//     let m = p.open();
 
-    must_eat_one_of!(p, r, [KW_LEFT, KW_RIGHT, KW_FULL]);
-    p.eat(KW_OUTER);
-    p.must_eat(KW_JOIN, r);
+//     must_eat_one_of!(p, r, [KW_LEFT, KW_RIGHT, KW_FULL]);
+//     p.eat(KW_OUTER);
+//     p.must_eat(KW_JOIN, r);
 
-    p.close(m, OuterJoin);
-}
+//     p.close(m, OuterJoin);
+// }
 
-pub fn cross_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, KW_CROSS, CrossJoin);
+// pub fn cross_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, KW_CROSS, CrossJoin);
 
-    let m = p.open();
+//     let m = p.open();
 
-    p.must_eat(KW_CROSS, r);
-    p.must_eat(KW_JOIN, r);
+//     p.must_eat(KW_CROSS, r);
+//     p.must_eat(KW_JOIN, r);
 
-    p.close(m, CrossJoin);
-}
+//     p.close(m, CrossJoin);
+// }
 
-pub fn non_comma_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, NON_COMMA_JOIN_START, NonCommaJoin);
+// pub fn non_comma_join<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, NON_COMMA_JOIN_START, NonCommaJoin);
 
-    let m = p.open();
+//     let m = p.open();
 
-    if p.at(KW_CROSS) {
-        cross_join(p, r);
-    } else if p.at_any(OUTER_JOIN_START) {
-        outer_join(p, r);
-    } else if p.at(KW_INNER) {
-        inner_join(p, r);
-    } else if p.at(KW_NATURAL) {
-        natural_join(p, r);
-    } else if p.at(KW_JOIN) {
-        p.wrap(Join, |p| p.guaranteed(KW_JOIN));
-    } else {
-        unreachable!("DEV ERROR: NON_COMMA_JOIN_START is incorrect")
-    }
+//     if p.at(KW_CROSS) {
+//         cross_join(p, r);
+//     } else if p.at_any(OUTER_JOIN_START) {
+//         outer_join(p, r);
+//     } else if p.at(KW_INNER) {
+//         inner_join(p, r);
+//     } else if p.at(KW_NATURAL) {
+//         natural_join(p, r);
+//     } else if p.at(KW_JOIN) {
+//         p.wrap(Join, |p| p.guaranteed(KW_JOIN));
+//     } else {
+//         unreachable!("DEV ERROR: NON_COMMA_JOIN_START is incorrect")
+//     }
 
-    p.close(m, NonCommaJoin);
-}
+//     p.close(m, NonCommaJoin);
+// }
+
+// pub fn join_operator<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+//     bail_if_not_at!(p, r, JOIN_OPERATOR_START, JoinOperator);
+
+//     let m = p.open();
+
+//     if p.at(T![,]) {
+//         p.wrap(CommaJoin, |p| p.advance());
+//     } else {
+//         non_comma_join(p, r);
+//     }
+
+//     p.close(m, JoinOperator);
+// }
 
 pub fn join_operator<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     bail_if_not_at!(p, r, JOIN_OPERATOR_START, JoinOperator);
-
-    let m = p.open();
-
-    if p.at(T![,]) {
-        p.wrap(CommaJoin, |p| p.advance());
-    } else {
-        non_comma_join(p, r);
+    // The simple case
+    if p.at_any(T![,] | KW_JOIN) {
+        p.wrap(JoinOperator, |p| p.advance());
+        return;
     }
 
-    p.close(m, JoinOperator);
+    let m = p.open();
+    let mut slot = 0;
+    let mut joins = enum_set!();
+
+    while slot < 3 {
+        if !(JOIN_OPERATOR_START - KW_JOIN).contains(p.nth(0)) {
+            break;
+        }
+        joins |= p.nth(0);
+        p.advance();
+        slot += 1;
+    }
+
+    // "INNER" cannot appear together with "OUTER", "LEFT", "RIGHT", or "FULL".
+    // "CROSS" cannot appear together with "OUTER", "LEFT", "RIGHT, or "FULL".
+    if (!joins.is_disjoint(KW_INNER | KW_CROSS) && !joins.is_disjoint(KW_OUTER | KW_LEFT | KW_RIGHT | KW_FULL))
+        // If "OUTER" is present then there must also be one of "LEFT", "RIGHT", or "FULL"
+        || (joins.contains(KW_OUTER) && joins.is_disjoint(KW_LEFT | KW_RIGHT | KW_FULL))
+    {
+        let close_err = p.close_err(m, ParseErrorKind::IllegalJoinOperator);
+        let join_open = p.open_before(close_err);
+        p.must_eat(KW_JOIN, r);
+        p.close(join_open, JoinOperator);
+    } else {
+        p.must_eat(KW_JOIN, r);
+        p.close(m, JoinOperator);
+    }
 }
 
 pub fn join_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -2391,7 +2454,7 @@ pub fn join_clause<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         }
 
         let m = p.open_before(lhs_marker);
-        join_operator(p, r);
+        join_operator(p, r | p.table_or_subquery_start);
         table_or_subquery(p, r);
 
         // TODO: Verify this is valid for all type of joins
@@ -2420,6 +2483,25 @@ pub fn expr_list<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, ExprList);
 }
 
+pub fn emptyable_expr_list<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+    bail_if_not_at!(p, r, T!['('], ExprList);
+
+    let m = p.open();
+
+    p.guaranteed(T!['(']);
+
+    if p.at_any(p.expr_start) {
+        expr(p, r);
+        while p.eat(T![,]) {
+            expr(p, r);
+        }
+    }
+
+    p.must_eat(T![')'], r);
+
+    p.close(m, EmptyableExprList);
+}
+
 pub fn full_table_function_name<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     bail_if_not_at!(p, r, p.name_token, FullTableFunctionName);
 
@@ -2438,7 +2520,7 @@ pub fn from_clause_table_value_function<L: Lexer>(p: &mut SqliteParser<L>, r: To
     let m = p.open();
 
     full_table_function_name(p, r);
-    expr_list(p, r);
+    emptyable_expr_list(p, r);
 
     if p.at_any(p.with_alias_start) {
         with_alias(p, r);
@@ -2474,7 +2556,7 @@ pub fn with_alias<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     if p.eat(KW_AS) {
         must_eat_name(p, r, AliasName);
     } else {
-        // The reason the else case do not allow name_token is because other there will be
+        // The reason the else case do not allow name_token is because otherwise there will be
         // ambiguity related to join keywords
         p.must_eat_any(p.iden_or_str, AliasName, r);
     }
@@ -2505,29 +2587,31 @@ pub fn qualified_table_name<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 pub fn table_or_subquery<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) -> MarkClosed {
     let m = p.open();
 
-    let table_or_subquery_start = p.name_token | T!['('];
     // Table Value function must come first or it would be parsed as qualified table name
-    if p.at_any(p.name_token) && (p.nth(1) == T!['('] || p.nth(3) == T![')']) {
+    if at_from_clause_table_value_function(p) {
         from_clause_table_value_function(p, r);
     } else if p.at_any(p.name_token) {
         qualified_table_name(p, r);
-    } else if p.eat(T!['(']) {
+    } else if p.at(T!['(']) {
         if SELECT_STMT_WITH_CTE_START.contains(p.nth(1)) {
-            p.wrap(FromClauseSelectStmt, |p| {
-                select_stmt_with_cte(p, r | T![')']);
-                p.must_eat(T![')'], r);
-
-                if p.at_any(p.with_alias_start) {
-                    with_alias(p, r);
-                }
-            });
-        } else if table_or_subquery_start.contains(p.nth(1)) {
+            p.guaranteed(T!['(']);
+            select_stmt_with_cte(p, r | T![')']);
+            p.must_eat(T![')'], r);
+        } else if p.table_or_subquery_start.contains(p.nth(1)) {
+            p.guaranteed(T!['(']);
             join_clause(p, r | T![')']);
             p.must_eat(T![')'], r);
         } else {
+            let items = expected_items!(SelectStmtWithCte, TableOrSubquery);
+            p.wrap_err(items, r - T![')'], |p| p.advance());
             expected_one_of!(p, r | T![')'], [SelectStmtWithCte, TableOrSubquery]);
-            p.must_eat(T![')'], r);
         }
+    } else {
+        p.proceed_with_err(r, TableOrSubquery);
+    }
+
+    if p.at_any(p.with_alias_start) {
+        with_alias(p, r);
     }
 
     p.close(m, TableOrSubquery)
@@ -2600,7 +2684,7 @@ pub fn result_column<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 }
 
 pub fn traditional_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    let r = r | KW_FROM | KW_GROUP | KW_HAVING | KW_WINDOW;
+    let r = r | KW_FROM | KW_WHERE | KW_GROUP | KW_HAVING | KW_WINDOW;
     let m = p.open();
 
     p.must_eat(KW_SELECT, r);
@@ -2710,7 +2794,7 @@ pub fn common_table_expr<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     p.must_eat(KW_AS, r);
 
-    if p.at(KW_NOT) {
+    if p.at_any(MATERIALIZED_CTE_START) {
         materialized_cte(p, r);
     }
 
@@ -2749,14 +2833,14 @@ pub fn select_stmt_with_cte<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, SelectStmtWithCte);
 }
 
-pub fn in_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+pub fn expr_select<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     let m = p.open();
 
     p.guaranteed(T!['(']);
     select_stmt_with_cte(p, r);
     p.must_eat(T![')'], r);
 
-    p.close(m, InSelect);
+    p.close(m, ExprSelect);
 }
 
 pub fn collation<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -2849,17 +2933,17 @@ pub fn unique_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, UniqueConstraint);
 }
 
-pub fn not_null_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
+pub fn null_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     let m = p.open();
 
-    p.guaranteed(KW_NOT);
+    p.eat(KW_NOT);
     p.must_eat(KW_NULL, r);
 
     if p.at(KW_ON) {
         conflict_clause(p, r);
     }
 
-    p.close(m, NotNullConstraint);
+    p.close(m, NullConstraint);
 }
 
 pub fn conflict_action<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -2926,8 +3010,8 @@ pub fn column_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     if p.at(KW_PRIMARY) {
         primary_constraint(p, r);
-    } else if p.at(KW_NOT) {
-        not_null_constraint(p, r);
+    } else if p.at_any(KW_NOT | KW_NULL) {
+        null_constraint(p, r);
     } else if p.at(KW_UNIQUE) {
         unique_constraint(p, r);
     } else if p.at(KW_CHECK) {
@@ -2936,6 +3020,8 @@ pub fn column_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         default_constraint(p, r);
     } else if p.at(KW_COLLATE) {
         collation(p, r);
+    } else if p.at(KW_REFERENCES) {
+        fk_clause(p, r);
     } else if p.at_any(COLUMN_GENERATED_START) {
         column_generated(p, r);
     } else {
@@ -2945,9 +3031,11 @@ pub fn column_constraint<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     p.close(m, ColumnConstraint);
 }
 
-pub fn signed_number<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    bail_if_not_at!(p, r, SIGNED_NUMBER_START, SignedNumber);
-
+pub fn signed_number<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) -> Option<MarkClosed> {
+    if !p.at_any(SIGNED_NUMBER_START) {
+        p.expected_one_of(expected_items!(SignedNumber), r);
+        return None;
+    }
     let m = p.open();
 
     p.eat_any(PLUS | MINUS);
@@ -2955,7 +3043,7 @@ pub fn signed_number<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
         expected_one_of!(p, r, [INT_LIT, REAL_LIT, HEX_LIT]);
     }
 
-    p.close(m, SignedNumber);
+    Some(p.close(m, SignedNumber))
 }
 
 pub fn type_name<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
@@ -2971,10 +3059,14 @@ pub fn type_name<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
     }
 
     if p.eat(T!['(']) {
-        signed_number(p, r);
+        if let Some(lhs_closed) = signed_number(p, r) {
+            p.tag_last_closed2(lhs_closed, SqliteTreeTag::Lhs);
+        }
 
         if p.eat(T![,]) {
-            signed_number(p, r);
+            if let Some(rhs_closed) = signed_number(p, r) {
+                p.tag_last_closed2(rhs_closed, SqliteTreeTag::Rhs);
+            }
         }
         p.must_eat(T![')'], r);
     }
@@ -3017,7 +3109,7 @@ pub fn table_details<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 
     if p.at_any(TABLE_CONSTRAINT_START) {
         table_constraint(p, r);
-        while p.eat(T![,]) {
+        while p.eat(T![,]) || p.at_any(TABLE_CONSTRAINT_START) {
             table_constraint(p, r);
         }
     }
@@ -3046,12 +3138,12 @@ pub fn full_table_name<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
 }
 
 pub fn if_not_exists<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) {
-    let r = r | KW_NOT | KW_EXISTS;
+    let lr = &mut (r | KW_NOT | KW_EXISTS);
     let m = p.open();
 
     p.guaranteed(KW_IF);
-    p.must_eat(KW_NOT, r);
-    p.must_eat(KW_EXISTS, r);
+    p.must_eat2(KW_NOT, lr);
+    p.must_eat2(KW_EXISTS, lr);
 
     p.close(m, IfNotExists);
 }
@@ -3089,7 +3181,7 @@ pub(crate) fn expr<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet) -> Option<Mar
 /// If there is no right hand side expression, then the left hand side becomes the whole
 /// expression
 fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option<MarkClosed> {
-    if !p.at_any_now_or_later(p.expr_start, r) {
+    if !p.at_any(p.expr_start) {
         expected_one_of!(p, r, Expr);
         return None;
     }
@@ -3103,7 +3195,7 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
     if p.at_any(EXPR_LIT_START) {
         expr_lit(p, r)
     } else if p.at(T!['(']) {
-        if p.nth(1) == KW_SELECT {
+        if SELECT_STMT_WITH_CTE_START.contains(p.nth(1)) {
             expr_select(p, r)
         } else if p.expr_start.contains(p.nth(1)) {
             expr_list(p, r)
@@ -3111,14 +3203,8 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
             let items = expected_items!(ExprSelect, ExprList);
             p.wrap_err(items, r, |p| p.advance());
         }
-    } else if p.at_any(EXPR_BIND_PARAM_START) {
+    } else if p.at(PARAM) {
         expr_bind_param(p, r);
-    } else if p.at_any(p.name_token) {
-        if p.nth(1) == T!['('] {
-            expr_func(p, r);
-        } else {
-            expr_column_name(p, r);
-        }
     } else if p.at_any(EXPR_PREFIX_START) {
         expr_prefix(p, r)
     } else if p.at(KW_CAST) {
@@ -3128,7 +3214,13 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
     } else if p.at(KW_RAISE) {
         raise_func(p, r);
     } else if p.at_any(KW_NOT | KW_EXISTS) {
-        expr_select(p, r);
+        expr_exists_select(p, r);
+    } else if p.at_any(p.name_token) {
+        if p.nth(1) == T!['('] {
+            expr_func(p, r);
+        } else {
+            expr_column_name(p, r);
+        }
     } else {
         unreachable!("DEV ERROR: Bug in this if statement")
     };
@@ -3143,7 +3235,7 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
         if let Some(postfix_op) = utils::which_postfix_op(p) {
             // If we think we are also at an infix_op, there is ambiguity and means
             // our at_infix_op is not specific enough (we only check start tokens after all)
-            assert!(!utils::which_infix_op(p).is_none());
+            assert!(utils::which_infix_op(p).is_none());
 
             let (Some(l_bp), None) = precedence_table(postfix_op) else {
                 unreachable!("DEV ERROR: Operator should be postfix")
@@ -3182,33 +3274,40 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
 
             // LIKE | NOT LIKE are special cases
             if matches!(infix_op, OpLike | OpNotLike) {
+                p.tag_last_closed2(lhs_marker, SqliteTreeTag::Lhs);
+
                 if infix_op == OpNotLike {
                     p.guaranteed(KW_NOT);
                 }
                 p.guaranteed(KW_LIKE);
 
-                expr_bp(p, r, r_bp);
+                if let Some(rhs_closed) = expr_bp(p, r, r_bp) {
+                    p.tag_last_closed2(rhs_closed, SqliteTreeTag::Rhs);
+                }
 
-                if p.eat(KW_ESCAPE) {
-                    // TODO: SQLite spec actually allow an expr here but we will only support
-                    // string literals for now
-                    p.must_eat(STR_LIT, r);
+                // TODO: Is this correct? How does precedence work with Escape?
+                if p.at(KW_ESCAPE) {
+                    p.wrap(OpEscape, |p| {
+                        p.guaranteed(KW_ESCAPE);
+                        expr(p, r);
+                    });
                 }
             }
             // IN () and NOT IN () are special cases
             else if matches!(infix_op, OpIn | OpNotIn) {
+                // OpIn and OpNotIn do not need tags as they do not have a Expr RHS
                 if infix_op == OpNotIn {
                     p.guaranteed(KW_NOT);
                 }
                 p.guaranteed(KW_IN);
 
                 if p.at(T!['(']) {
-                    if p.nth(1) == KW_SELECT {
-                        in_select(p, r)
-                    } else if p.expr_start.contains(p.nth(1)) {
-                        expr_list(p, r)
+                    if SELECT_STMT_WITH_CTE_START.contains(p.nth(1)) {
+                        expr_select(p, r)
+                    } else if p.expr_start.contains(p.nth(1)) || p.nth(1) == T![')'] {
+                        emptyable_expr_list(p, r)
                     } else {
-                        let items = expected_items!(ExprSelect, ExprList);
+                        let items = expected_items!(ExprSelect, EmptyableExprList);
                         p.wrap_err(items, r, |p| p.advance());
                     }
                 } else if p.at_any(p.name_token) {
@@ -3234,19 +3333,32 @@ fn expr_bp<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, min_bp: u8) -> Option
             }
             // BETWEEN [expr] AND [expr] is yet another special case
             else if matches!(infix_op, OpBetweenAnd | OpNotBetweenAnd) {
+                p.tag_last_closed2(lhs_marker, SqliteTreeTag::Target);
+
                 if infix_op == OpNotBetweenAnd {
                     p.guaranteed(KW_NOT);
                 }
                 p.guaranteed(KW_BETWEEN);
-                expr(p, r);
+
+                if let Some(low_closed) = expr(p, r) {
+                    p.tag_last_closed2(low_closed, SqliteTreeTag::Low);
+                }
+
                 p.must_eat(KW_AND, r);
 
-                expr_bp(p, r, r_bp);
+                if let Some(high_closed) = expr_bp(p, r, r_bp) {
+                    p.tag_last_closed2(high_closed, SqliteTreeTag::High);
+                }
             }
             // Handle normal infix operators
             else {
+                p.tag_last_closed2(lhs_marker, SqliteTreeTag::Lhs);
+
                 parse_infix_op(p, r, infix_op);
-                expr_bp(p, r, r_bp);
+
+                if let Some(rhs_closed) = expr_bp(p, r, r_bp) {
+                    p.tag_last_closed2(rhs_closed, SqliteTreeTag::Rhs);
+                }
             }
 
             // { Expr infix_token Expr } -> Expr { ExprInfix { InfixOp { Expr infix_token Expr }}}
@@ -3317,7 +3429,7 @@ fn parse_infix_op<L: Lexer>(p: &mut SqliteParser<L>, r: TokenSet, infix_op: Sqli
 #[rustfmt::skip]
 fn precedence_table(op: SqliteTreeKind) -> (Option<u8>, Option<u8>) {
     match op {
-        OpBinComplement | OpUnaryMinus | OpUnaryPlus             => (None, Some(23)),
+        OpBinComplement | OpUnaryMinus | OpUnaryPlus             => (None, Some(24)),
         OpCollate                                                => (Some(21), None),
         OpConcat | OpExtractOne | OpExtractTwo                   => (Some(19), Some(20)),
         OpMultiply | OpDivide | OpModulus                        => (Some(17), Some(18)),
@@ -3327,11 +3439,13 @@ fn precedence_table(op: SqliteTreeKind) -> (Option<u8>, Option<u8>) {
         OpLT | OpGT | OpLTE | OpGTE                              => (Some(9) , Some(10)),
 
         OpEq | OpNotEq | OpIs | OpIsNot | OpIsDistinctFrom
-          | OpIsNotDistinctFrom | OpBetweenAnd | OpNotBetweenAnd
-          | OpIn | OpNotIn | OpMatch | OpNotMatch | OpLike
-          | OpNotLike| OpRegexp | OpNotRegexp | OpGlob
-          | OpNotGlob | OpIsNull | OpNotNull | OpNotSpaceNull    => (Some(7), Some(8)),
+        | OpIsNotDistinctFrom | OpBetweenAnd | OpNotBetweenAnd
+        | OpIn | OpNotIn | OpMatch | OpNotMatch | OpLike
+        | OpNotLike| OpRegexp | OpNotRegexp | OpGlob
+        | OpNotGlob                                            => (Some(7), Some(8)),
 
+        OpIsNull | OpNotNull | OpNotSpaceNull                    => (Some(7), None),
+        
         OpNot                                                    => (None, Some(5)),
         OpAnd                                                    => (Some(3), Some(4)),
         OpOr                                                     => (Some(1), Some(2)),
@@ -3427,7 +3541,7 @@ pub(crate) mod utils {
         for e in p.events.iter().rev() {
             match e {
                 Event::Open { .. } | Event::Error { .. } => event_diff += 1,
-                Event::Close => event_diff -= 1,
+                Event::Close { .. } => event_diff -= 1,
                 Event::Advance { .. } => tk_count += 1,
             }
 
@@ -3484,11 +3598,9 @@ pub(crate) mod utils {
         enum_set!(KW_DELETE | KW_INSERT | KW_UPDATE);
 
     pub(crate) const TRIGGER_BODY_STMT_START: TokenSet =
-        enum_set!(KW_INSERT | KW_UPDATE | KW_DELETE | SELECT_STMT_START);
+        enum_set!(INSERT_STMT_START | KW_UPDATE | KW_DELETE | SELECT_STMT_WITH_CTE_START);
 
     pub(crate) const SELECT_STMT_WITH_CTE_START: TokenSet = enum_set!(KW_WITH | SELECT_STMT_START);
-
-    pub(crate) const MODULE_ARG_START: TokenSet = enum_set!(NUMERIC_LIT | STR_LIT);
 
     pub(crate) const RETURNING_CLAUSE_START: TokenSet = enum_set!(KW_RETURNING);
 
@@ -3524,27 +3636,42 @@ pub(crate) mod utils {
 
     pub(crate) const FRAME_SPEC_START: TokenSet = enum_set!(KW_GROUPS | KW_ROWS | KW_RANGE);
 
-    pub(crate) const JOIN_OPERATOR_START: TokenSet = enum_set!(NON_COMMA_JOIN_START | COMMA);
+    pub(crate) const JOIN_OPERATOR_START: TokenSet = enum_set!(
+        COMMA
+            | KW_CROSS
+            | KW_INNER
+            | KW_JOIN
+            | KW_LEFT
+            | KW_NATURAL
+            | KW_RIGHT
+            | KW_FULL
+            | KW_OUTER
+    );
 
     pub(crate) const JOIN_CONSTRAINT_START: TokenSet = enum_set!(KW_USING | KW_ON);
-
-    pub(crate) const NON_COMMA_JOIN_START: TokenSet =
-        enum_set!(KW_INNER | KW_NATURAL | OUTER_JOIN_START | KW_CROSS | KW_JOIN);
-
-    pub(crate) const OUTER_JOIN_START: TokenSet = enum_set!(KW_RIGHT | KW_LEFT | KW_FULL);
 
     pub(crate) const COLUMN_CONSTRAINT_START: TokenSet = enum_set!(
         KW_UNIQUE
             | COLUMN_GENERATED_START
             | KW_PRIMARY
             | KW_NOT
+            | KW_NULL
             | KW_CONSTRAINT
             | KW_CHECK
             | KW_COLLATE
             | KW_DEFAULT
+            | KW_REFERENCES
     );
 
     pub(crate) const COLUMN_GENERATED_START: TokenSet = enum_set!(KW_AS | KW_GENERATED);
 
     pub(crate) const EXPR_EXISTS_SELECT_START: TokenSet = enum_set!(KW_NOT | KW_EXISTS | L_PAREN);
+
+    pub(crate) fn at_from_clause_table_value_function<L: Lexer>(p: &SqliteParser<L>) -> bool {
+        match (p.nth(0), p.nth(1), p.nth(2), p.nth(3)) {
+            (tk1, T![.], tk2, T!['(']) => p.name_token.intersection(tk1 | tk2) == tk1 | tk2,
+            (tk1, T!['('], ..) => p.name_token.contains(tk1),
+            _ => false,
+        }
+    }
 }
